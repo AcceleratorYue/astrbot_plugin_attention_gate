@@ -1,0 +1,70 @@
+--- a/main.py
++++ b/main.py
+@@ -1303,6 +1303,9 @@
+         image_flow: list[MessageRecord] | None = None,
+         voice_flow: list[MessageRecord] | None = None,
+         private_chat: bool = False,
++        attention_target: MessageRecord | None = None,
++        attention_reason: str = "",
++        attention_path: str = "",
+     ) -> str:
+         """生成场景描述，重点强调对话对象"""
+         esc = self._escape
+@@ -1332,6 +1335,17 @@
+             parts.append(
+                 f"  （这是在回{esc(reply_who)}先前说的：「{esc(current.reply_content[:120])}」）"
+             )
++        if attention_target is not None:
++            if attention_target.msg_id != current.msg_id:
++                parts.append(
++                    f"  （你这次主动接的是 {esc(attention_target.sender_name)} 的这条消息："
++                    f"「{esc(attention_target.content[:120])}」）"
++                )
++            else:
++                parts.append("  （你这次主动接的就是上面这条消息。）")
++        if attention_reason:
++            path_text = f"，路径 {esc(attention_path)}" if attention_path else ""
++            parts.append(f"  （主动判断依据：{esc(attention_reason)}{path_text}）")
+         if not private_chat and _looks_like_history_request(current.content):
+             parts.append(
+                 "  （要翻更早的群聊，就用 get_group_message_history 往前多翻几页；只看眼前几条会漏。）"
+@@ -3768,6 +3782,29 @@
+ 
+             participants = list({m.sender_name for m in flow if not m.is_bot})
+ 
++            attention_payload = event.get_extra("active_reply_triggered")
++            attention_reason = ""
++            attention_path = ""
++            if isinstance(attention_payload, dict):
++                attention_reason = str(attention_payload.get("reason") or "")
++                attention_path = str(attention_payload.get("path") or "")
++            attention_target = None
++            attention_target_id = str(
++                event.get_extra("attention_quote_target") or ""
++            ).strip()
++            if attention_target_id:
++                try:
++                    attention_target = next(
++                        (
++                            item
++                            for item in snapshot.messages
++                            if str(getattr(item, "msg_id", "")) == attention_target_id
++                        ),
++                        None,
++                    )
++                except Exception:
++                    attention_target = None
++
+             scene = self._scene_generator.generate(
+                 trigger_type=trigger_type,
+                 trigger_desc=trigger_desc,
+@@ -3783,6 +3820,9 @@
+                 image_flow=image_flow,
+                 voice_flow=voice_flow,
+                 private_chat=event.is_private_chat(),
++                attention_target=attention_target,
++                attention_reason=attention_reason,
++                attention_path=attention_path,
+             )
+ 
+             # 注入场景描述到请求（v3.0.0: 防止重复注入）
