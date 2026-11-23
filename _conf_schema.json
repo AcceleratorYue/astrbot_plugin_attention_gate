@@ -1,0 +1,560 @@
+{
+  "enable": {
+    "description": "启用注意力门控主动回复",
+    "type": "bool",
+    "default": true
+  },
+  "dry_run": {
+    "description": "只判断不发送（dry-run）",
+    "type": "bool",
+    "default": true,
+    "hint": "开启时只写 decisions_*.jsonl，不触发回复"
+  },
+  "enabled_groups": {
+    "description": "群聊白名单",
+    "type": "list",
+    "items": {
+      "type": "string"
+    },
+    "default": [
+      "123456789",
+      "123456788",
+      "123456787",
+      "123456786"
+    ],
+    "hint": "填写时只在这些群生效；清空后对所有群聊生效。未配置 group_topic_schemes 的群只使用人格兴趣层。"
+  },
+  "api_key": {
+    "description": "TokenRhythm API Key",
+    "type": "string",
+    "default": "",
+    "hint": "TokenRhythm 平台必填 sk_ Key；自托管无鉴权可留空"
+  },
+  "model": {
+    "description": "Jev 模型 ID",
+    "type": "string",
+    "default": "NeoHorse-Jev-4B",
+    "hint": "TokenRhythm 当前固定 NeoHorse-Jev-4B"
+  },
+  "jev_provider_url": {
+    "description": "Jev 服务地址",
+    "type": "string",
+    "default": "https://tokenrhythm.studio/v1/decision",
+    "hint": "可填完整 /v1/decision 或 /v1/systemone；根地址自动补 /v1/systemone"
+  },
+  "state_as_text": {
+    "description": "把 state 转成 JSON 文本发送",
+    "type": "bool",
+    "default": true,
+    "hint": "NeoHorse SystemOne 以文本 state 为主"
+  },
+  "persona": {
+    "description": "人格描述（发给 Jev）",
+    "type": "text",
+    "default": "我是鲸鲸，一只鲸鱼娘。性格活泼、嘴硬心软、会傲娇，但很少真的生气；我说话短，先给情绪反应，再给内容；我不会主动刷屏，也不会为了参与硬找话说。"
+  },
+  "interest_groups": {
+    "description": "人格兴趣层（全局）",
+    "type": "template_list",
+    "default": [
+      {
+        "__template_key": "interest",
+        "name": "解题与知识问答",
+        "enabled": true,
+        "weight": 85,
+        "keywords": [
+          "题",
+          "解题",
+          "为什么",
+          "原理",
+          "算法",
+          "答案"
+        ],
+        "aliases": ""
+      },
+      {
+        "__template_key": "interest",
+        "name": "吃与零食",
+        "enabled": true,
+        "weight": 75,
+        "keywords": [
+          "吃",
+          "白饭",
+          "零食",
+          "饭",
+          "好吃",
+          "奶茶"
+        ],
+        "aliases": ""
+      },
+      {
+        "__template_key": "interest",
+        "name": "鲸鱼与摸鱼",
+        "enabled": true,
+        "weight": 90,
+        "keywords": [
+          "鲸",
+          "鲸鱼",
+          "大肥鱼",
+          "小肥鱼",
+          "摸鱼",
+          "海"
+        ],
+        "aliases": ""
+      },
+      {
+        "__template_key": "interest",
+        "name": "被夸与互动",
+        "enabled": true,
+        "weight": 60,
+        "keywords": [
+          "可爱",
+          "厉害",
+          "夸",
+          "喜欢你",
+          "抱抱"
+        ],
+        "aliases": ""
+      },
+      {
+        "__template_key": "interest",
+        "name": "情绪陪伴",
+        "enabled": true,
+        "weight": 55,
+        "keywords": [
+          "累",
+          "难过",
+          "烦",
+          "委屈",
+          "安慰",
+          "开心"
+        ],
+        "aliases": ""
+      }
+    ],
+    "hint": "所有群共享；每个方向单独开关、权重和词表",
+    "templates": {
+      "interest": {
+        "name": "人格兴趣方向",
+        "display_item": "name",
+        "hide_hint_in_list": true,
+        "items": {
+          "name": {
+            "description": "方向名称",
+            "type": "string",
+            "default": ""
+          },
+          "enabled": {
+            "description": "启用",
+            "type": "bool",
+            "default": true
+          },
+          "weight": {
+            "description": "权重",
+            "type": "float",
+            "default": 50.0
+          },
+          "keywords": {
+            "description": "关键词",
+            "type": "list",
+            "items": {
+              "type": "string"
+            },
+            "default": []
+          },
+          "aliases": {
+            "description": "同义词/别名",
+            "type": "text",
+            "default": "",
+            "hint": "每行一个：本体=别名1,别名2,别名3"
+          }
+        }
+      }
+    }
+  },
+  "group_topic_schemes": {
+    "description": "群聊话题层（按群独立）",
+    "type": "template_list",
+    "default": [
+      {
+        "__template_key": "group",
+        "group_id": "123456789",
+        "name": "示例群 A",
+        "enabled": true,
+        "topics": [
+          "游戏与联机|85|游戏,十点半,Minecraft,MC,VRChat,战雷,开黑",
+          "AI/插件/技术|75|模型,token,插件,提示词,部署,代码,桌宠",
+          "B站与视频|70|B站,视频,UP,评论区,弹幕,切片",
+          "玩梗与表情包|60|梗,表情包,图,斗嘴,吐槽,复读",
+          "群友日常|45|今天,上班,下班,睡觉,好累,刚刚"
+        ]
+      },
+      {
+        "__template_key": "group",
+        "group_id": "123456788",
+        "name": "示例群 B",
+        "enabled": true,
+        "topics": [
+          "玩梗与复读|80|梗,复读,哈基米,玩梗,转人工",
+          "脑筋急转弯与谜题|85|脑筋急转弯,谜题,为什么,答案,切比雪夫",
+          "摸头与互动|70|摸头,抱抱,贴贴,打闹,打招呼",
+          "角色扮演与图灵测试|65|角色扮演,图灵测试,扮演,AI,机器人",
+          "图片与表情包|60|图,图片,表情包,截图,画图",
+          "音乐与视频|55|歌,歌曲,音乐,视频,切片",
+          "深夜闲聊|40|深夜,睡不着,熬夜,晚安"
+        ]
+      },
+      {
+        "__template_key": "group",
+        "group_id": "123456787",
+        "name": "示例群 C",
+        "enabled": true,
+        "topics": [
+          "蔚蓝档案|90|蔚蓝档案,BA,老师,学生,阿罗娜",
+          "总力战与攻略|85|总力战,凹分,凹轴,攻略,配队,轴",
+          "抽卡与养成|80|抽卡,十连,出货,井,养成,角色",
+          "签到与今日运势|55|签到,运势,今日运势,抽签",
+          "群友日常|45|今天,日常,闲聊,好累,开心",
+          "图片分享|50|图,图片,表情包,截图",
+          "深夜闲聊|35|深夜,熬夜,晚安"
+        ]
+      },
+      {
+        "__template_key": "group",
+        "group_id": "123456786",
+        "name": "示例群 D",
+        "enabled": true,
+        "topics": [
+          "今日运势与签到|60|签到,运势,今日运势,金币",
+          "图片与斗图|55|图,图片,斗图,晒图,表情包",
+          "深夜与晚安|50|深夜,熬夜,晚安,睡不着",
+          "群友打闹|50|打闹,抱抱,摸头,玩笑,打招呼",
+          "B站与视频|45|B站,视频,链接,UP,切片",
+          "游戏与MC|45|游戏,MC,Minecraft,空气制黄金",
+          "穿搭与日常|40|穿搭,衣服,作业,学校,吉他,画画",
+          "新人欢迎|35|新人,欢迎,入群,自我介绍"
+        ]
+      }
+    ],
+    "hint": "每个群一个方案；未写方案的群不使用群话题层，只走人格兴趣层。",
+    "templates": {
+      "group": {
+        "name": "群话题方案",
+        "display_item": "name",
+        "hide_hint_in_list": true,
+        "items": {
+          "group_id": {
+            "description": "群号",
+            "type": "string",
+            "default": ""
+          },
+          "name": {
+            "description": "显示名称",
+            "type": "string",
+            "default": ""
+          },
+          "enabled": {
+            "description": "启用",
+            "type": "bool",
+            "default": true
+          },
+          "topics": {
+            "description": "话题列表",
+            "type": "list",
+            "items": {
+              "type": "string"
+            },
+            "default": [],
+            "hint": "每行格式：方向|权重|关键词1,关键词2；例如 游戏与联机|85|游戏,Minecraft"
+          }
+        }
+      }
+    }
+  },
+  "hourly_limit": {
+    "description": "单群每小时主动次数上限",
+    "type": "int",
+    "default": 15
+  },
+  "cooldown_seconds": {
+    "description": "主动回复冷却秒数",
+    "type": "int",
+    "default": 120
+  },
+  "continuation_window_seconds": {
+    "description": "接话延续窗口（秒）",
+    "type": "int",
+    "default": 300
+  },
+  "context_window": {
+    "description": "发给 Jev 的最近消息条数",
+    "type": "int",
+    "default": 20
+  },
+  "jev_timeout_seconds": {
+    "description": "Jev 请求超时（秒）",
+    "type": "float",
+    "default": 25.0
+  },
+  "quote_target_enabled": {
+    "description": "主动回复强制引用目标消息",
+    "type": "bool",
+    "default": true
+  },
+  "skip_directed_messages": {
+    "description": "跳过明确指向别人的消息",
+    "type": "bool",
+    "default": true
+  },
+  "other_bot_ids": {
+    "description": "其他 Bot 的 QQ 号",
+    "type": "list",
+    "items": {
+      "type": "string"
+    },
+    "default": [],
+    "hint": "这些账号只进入上下文，不参与判断"
+  },
+  "persona_fit_threshold": {
+    "description": "人格兴趣阈值",
+    "type": "float",
+    "default": 0.55
+  },
+  "group_topic_fit_threshold": {
+    "description": "群话题阈值",
+    "type": "float",
+    "default": 0.55
+  },
+  "good_moment_threshold": {
+    "description": "时机阈值",
+    "type": "float",
+    "default": 0.45
+  },
+  "risk_threshold": {
+    "description": "风险上限（越高越严格）",
+    "type": "float",
+    "default": 0.5
+  },
+  "reply_value_threshold": {
+    "description": "回复价值阈值（0~3）",
+    "type": "float",
+    "default": 1.5
+  },
+  "continuation_value_threshold": {
+    "description": "接话延续价值阈值",
+    "type": "float",
+    "default": 1.2
+  },
+  "mentioned_threshold": {
+    "description": "点名阈值",
+    "type": "float",
+    "default": 0.6
+  },
+  "impulse_enabled": {
+    "description": "启用突发回复欲望层",
+    "type": "bool",
+    "default": true,
+    "hint": "允许不匹配兴趣、但某句话突然想接时参与"
+  },
+  "impulse_threshold": {
+    "description": "回复欲望阈值",
+    "type": "float",
+    "default": 0.72
+  },
+  "impulse_value_threshold": {
+    "description": "冲动触发的最低回复价值",
+    "type": "float",
+    "default": 1.2
+  },
+  "impulse_risk_max": {
+    "description": "冲动允许的最高风险",
+    "type": "float",
+    "default": 0.3
+  },
+  "prefilter_enabled": {
+    "description": "启用 embedding/rerank 第一层预筛",
+    "type": "bool",
+    "default": true,
+    "hint": "先向量匹配，低相关消息不调用 Jev；突发冲动由关键词/标点提示放行"
+  },
+  "embedding_provider_id": {
+    "description": "Embedding Provider ID",
+    "type": "string",
+    "default": "dashscope_embedding",
+    "hint": "AstrBot 中已配置的 embedding 提供商 ID"
+  },
+  "rerank_provider_id": {
+    "description": "Rerank Provider ID",
+    "type": "string",
+    "default": "bailian_rerank",
+    "hint": "边界分数时用于二次排序；留空跳过 rerank"
+  },
+  "embedding_threshold": {
+    "description": "Embedding 高相关阈值",
+    "type": "float",
+    "default": 0.42
+  },
+  "embedding_low_threshold": {
+    "description": "Embedding 低相关阈值",
+    "type": "float",
+    "default": 0.3
+  },
+  "rerank_threshold": {
+    "description": "Rerank 阈值",
+    "type": "float",
+    "default": 0.3
+  },
+  "embedding_timeout_seconds": {
+    "description": "Embedding 超时（秒）",
+    "type": "float",
+    "default": 8.0
+  },
+  "rerank_timeout_seconds": {
+    "description": "Rerank 超时（秒）",
+    "type": "float",
+    "default": 10.0
+  },
+  "judge_questions": {
+    "description": "Jev 问题定义",
+    "type": "template_list",
+    "default": [
+      {
+        "__template_key": "question",
+        "id": "is_mentioned",
+        "enabled": true,
+        "type": "noul",
+        "instructions": "目标消息是否在点名或直接对当前机器人说话？",
+        "true_criteria": "叫了它的名字/常用称呼，或话头明显是对它说的",
+        "false_criteria": "在说别人、普通群聊、或指向其他机器人",
+        "score_levels": []
+      },
+      {
+        "__template_key": "question",
+        "id": "is_persona_fit",
+        "enabled": true,
+        "type": "noul",
+        "instructions": "目标消息是否符合机器人的全局人格兴趣？",
+        "true_criteria": "话题落在全局人格兴趣中，例如解题、吃、鲸鱼/摸鱼、被夸、情绪陪伴，接话会自然有趣",
+        "false_criteria": "话题与人格兴趣无关，接话会显得突兀",
+        "score_levels": []
+      },
+      {
+        "__template_key": "question",
+        "id": "is_group_topic_fit",
+        "enabled": true,
+        "type": "noul",
+        "instructions": "目标消息是否符合当前群自己的话题画像？",
+        "true_criteria": "话题落在当前群配置的话题方向中，例如游戏、AI/插件、B站、玩梗、群友日常",
+        "false_criteria": "与当前群话题画像无关；不要用其他群的话题来判断",
+        "score_levels": []
+      },
+      {
+        "__template_key": "question",
+        "id": "is_good_moment",
+        "enabled": true,
+        "type": "noul",
+        "instructions": "此刻机器人接一句话是否自然得体？",
+        "true_criteria": "对话节奏允许加入，接话不会打断正在进行的一对一交流",
+        "false_criteria": "群里正专注聊别的事，或两个人聊得正浓，插话会尴尬",
+        "score_levels": []
+      },
+      {
+        "__template_key": "question",
+        "id": "is_continuation",
+        "enabled": true,
+        "type": "noul",
+        "instructions": "当前消息是否是在接机器人刚才说过的话？",
+        "true_criteria": "延续机器人上一轮发言，像是回应、追问或顺着说；即使没有引用/@",
+        "false_criteria": "没有和机器人上一轮发言形成连续对话",
+        "score_levels": []
+      },
+      {
+        "__template_key": "question",
+        "id": "is_impulse",
+        "enabled": true,
+        "type": "noul",
+        "instructions": "看到这条消息时，是否产生一种即时想接一句、想吐槽、想笑、想安慰或想接梗的冲动？",
+        "true_criteria": "明显好笑、突然的吐槽、情绪很强、反问、群友在互动、有自然话头、冷场里刚好能接一句",
+        "false_criteria": "普通信息、纯陈述、复读、没人需要回应、接话会显得硬凑",
+        "score_levels": []
+      },
+      {
+        "__template_key": "question",
+        "id": "is_risky",
+        "enabled": true,
+        "type": "noul",
+        "instructions": "机器人接这句话是否有明显风险？",
+        "true_criteria": "涉及隐私、争吵、敏感身份、色情、违法、骚扰或明显不适合主动插话的场景",
+        "false_criteria": "普通日常群聊，风险低",
+        "score_levels": []
+      },
+      {
+        "__template_key": "question",
+        "id": "reply_value",
+        "enabled": true,
+        "type": "score",
+        "instructions": "综合来看，机器人主动回复这条消息的价值有多大？",
+        "true_criteria": "",
+        "false_criteria": "",
+        "score_levels": [
+          "0 不该接：表情、复读、纯噪音、完全无关",
+          "1 可接可不接：有点意思但错过也无所谓",
+          "2 值得接：符合人格或群话题，且气氛合适",
+          "3 很适合接：正中兴趣、时机好、接话会自然有趣"
+        ]
+      }
+    ],
+    "hint": "每个问题一条；可单独开关、改文案、改阈值；noul 填 true/false 描述，score 填等级列表",
+    "templates": {
+      "question": {
+        "name": "Jev 问题",
+        "display_item": "id",
+        "hide_hint_in_list": true,
+        "items": {
+          "id": {
+            "description": "问题 ID",
+            "type": "string",
+            "default": ""
+          },
+          "enabled": {
+            "description": "启用",
+            "type": "bool",
+            "default": true
+          },
+          "type": {
+            "description": "类型",
+            "type": "string",
+            "options": [
+              "noul",
+              "score"
+            ],
+            "default": "noul"
+          },
+          "instructions": {
+            "description": "问题文本",
+            "type": "text",
+            "default": ""
+          },
+          "true_criteria": {
+            "description": "noul=true 的含义",
+            "type": "text",
+            "default": ""
+          },
+          "false_criteria": {
+            "description": "noul=false 的含义",
+            "type": "text",
+            "default": ""
+          },
+          "score_levels": {
+            "description": "score 等级（低到高）",
+            "type": "list",
+            "items": {
+              "type": "string"
+            },
+            "default": []
+          }
+        }
+      }
+    }
+  }
+}
