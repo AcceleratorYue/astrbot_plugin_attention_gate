@@ -574,6 +574,31 @@ class PrefilterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(vectors), 12)
 
 
+class ProviderSelectionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_forces_main_chat_provider(self) -> None:
+        plugin = object.__new__(AttentionGatePlugin)
+        plugin.config = FakeConfig({"use_main_chat_provider": True})
+
+        class FakeContext:
+            async def get_current_chat_provider_id(self, umo):
+                return "main/model"
+
+        class FakeEvent:
+            unified_msg_origin = "napcat:GroupMessage:123456789"
+
+            def __init__(self):
+                self.extras = {}
+
+            def set_extra(self, key, value):
+                self.extras[key] = value
+
+        plugin.context = FakeContext()
+        event = FakeEvent()
+        provider_id = await plugin._force_main_chat_provider(event)
+        self.assertEqual(provider_id, "main/model")
+        self.assertEqual(event.extras["selected_provider"], "main/model")
+
+
 class PromptTests(unittest.TestCase):
     def test_dispatch_prompt_forbids_quote_tags(self) -> None:
         plugin = object.__new__(AttentionGatePlugin)

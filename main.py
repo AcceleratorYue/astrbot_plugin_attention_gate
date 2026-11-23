@@ -36,7 +36,7 @@ from astrbot.api.message_components import At, Image, Plain, Reply
 from astrbot.api.star import Context, Star, StarTools
 
 PLUGIN_NAME = "astrbot_plugin_attention_gate"
-VERSION = "0.2.4"
+VERSION = "0.2.5"
 LOG = f"[{PLUGIN_NAME}]"
 
 DEFAULT_JEV_URL = "https://tokenrhythm.studio/v1/decision"
@@ -1163,6 +1163,27 @@ class AttentionGatePlugin(Star):
         except Exception:
             return False
 
+    async def _force_main_chat_provider(self, event: AstrMessageEvent) -> str:
+        """把主动回复固定到当前会话的聊天模型，避免落到 functional_provider。
+
+        AstrBot 会把插件构造的 ProviderRequest 视为功能性请求，默认优先使用
+        provider_settings.functional_provider_id。主动回复仍应使用主聊天模型，
+        因此显式设置 selected_provider。
+        """
+        if not self._bool("use_main_chat_provider", True):
+            return ""
+        try:
+            provider_id = await self.context.get_current_chat_provider_id(
+                event.unified_msg_origin
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("%s 获取主聊天模型失败，沿用 AstrBot 默认选择: %s", LOG, exc)
+            return ""
+        if provider_id:
+            event.set_extra("selected_provider", str(provider_id))
+            logger.info("%s 主动回复使用主聊天模型: %s", LOG, provider_id)
+        return str(provider_id or "")
+
     def _dispatch_prompt(
         self, group_id: str, state: dict[str, Any], target: dict[str, Any], reason: str
     ) -> str:
@@ -1316,6 +1337,8 @@ class AttentionGatePlugin(Star):
         if self._bool("quote_target_enabled", True):
             event.set_extra(TRIGGER_QUOTE_EXTRA, str(record["message_id"]))
 
+        provider_id = await self._force_main_chat_provider(event)
+        ledger["provider_id"] = provider_id
         prompt = self._dispatch_prompt(group_id, state, target, reason)
         ledger["action"] = "dispatch"
         ledger["cooldown_until"] = state["cooldown_until"]

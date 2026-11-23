@@ -372,6 +372,22 @@ attention_quote_target
 - `full`：注意力插件自己附带最近消息；
 - `target_only`：始终不附带最近消息。
 
+### 主动回复模型
+
+默认开启：
+
+```json
+"use_main_chat_provider": true
+```
+
+触发前会读取当前会话的主聊天模型，并设置：
+
+```python
+event.set_extra("selected_provider", provider_id)
+```
+
+否则 AstrBot 会把插件构造的 `ProviderRequest` 当作功能性请求，优先使用 `provider_settings.functional_provider_id`，导致主动回复落到另一个模型。
+
 ### 前置停止检查
 
 入口会检查：

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.5 (2026-11-24)
+
+### 修复
+- 主动回复显式设置 `selected_provider` 为当前会话主聊天模型，避免被 AstrBot 当作功能性请求路由到 `provider_settings.functional_provider_id`（此前实际使用 `starryapi_glm/glm-5.3-flash`）。
+- 新增 `use_main_chat_provider` 配置，默认开启。
+- 增加主聊天模型选择测试。
+
 ## 0.2.4 (2026-11-24)
 
 ### 修复
