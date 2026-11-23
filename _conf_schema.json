@@ -302,6 +302,12 @@
     "default": "auto",
     "hint": "auto=检测到 Context Aware 时只发目标+理由，由 Context Aware 注入群聊上下文；full=自己附带最近消息；target_only=始终不附带最近消息"
   },
+  "use_main_chat_provider": {
+    "description": "主动回复使用主聊天模型",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后显式指定当前会话的聊天模型，避免 AstrBot 把插件请求路由到 functional_provider_id"
+  },
   "jev_timeout_seconds": {
     "description": "Jev 请求超时（秒）",
     "type": "float",
