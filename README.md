@@ -379,6 +379,23 @@ event.is_stopped()
 
 `quiet_hours`、黑名单或其他前置插件已经拦停时，不再调用预筛和 Jev。
 
+### Context Aware 目标消息补丁
+
+仓库提供针对 `astrbot_plugin_context_aware` v3.7.1 的可选补丁：
+
+```text
+patches/context_aware_attention_target.patch
+```
+
+应用后，Context Aware 的场景描述会显示：
+
+```text
+（你这次主动接的是 张三 的这条消息：「...」）
+（主动判断依据：value(1.55)，路径 value）
+```
+
+不打补丁也不会破坏主动回复；只是场景里不会显示主动目标消息。
+
 ## 引用链路
 
 主动回复触发时，插件会设置：

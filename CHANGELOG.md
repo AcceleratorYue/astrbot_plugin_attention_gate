@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.2 (2026-11-23)
+
+### 文档
+- 增加 `patches/context_aware_attention_target.patch`，用于兼容 AstrBot Context Aware v3.7.1 的目标消息场景显示。
+- 说明不打补丁时主动回复仍可正常工作，只是场景中不显示主动目标消息。
+
 ## 0.2.1 (2026-11-23)
 
 ### 改进
