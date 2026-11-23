@@ -36,7 +36,7 @@ from astrbot.api.message_components import At, Image, Plain, Reply
 from astrbot.api.star import Context, Star, StarTools
 
 PLUGIN_NAME = "astrbot_plugin_attention_gate"
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 LOG = f"[{PLUGIN_NAME}]"
 
 DEFAULT_JEV_URL = "https://tokenrhythm.studio/v1/decision"
@@ -1140,6 +1140,18 @@ class AttentionGatePlugin(Star):
             logger.warning("%s 获取对话失败: %s", LOG, exc)
             return None, ""
 
+    def _use_target_only_prompt(self) -> bool:
+        mode = str(self._cfg("prompt_context_mode", "auto") or "auto").strip()
+        if mode == "target_only":
+            return True
+        if mode == "full":
+            return False
+        # auto: 运行目录中存在 context_aware 时，上下文交给它注入，避免重复。
+        try:
+            return (Path(__file__).resolve().parent.parent / "astrbot_plugin_context_aware").is_dir()
+        except Exception:
+            return False
+
     def _dispatch_prompt(
         self, group_id: str, state: dict[str, Any], target: dict[str, Any], reason: str
     ) -> str:
@@ -1150,18 +1162,27 @@ class AttentionGatePlugin(Star):
             if item.get("is_self"):
                 name = f"{name}(我)"
             lines.append(f"[#{item.get('message_id')}] {name}: {item.get('content')}")
-        return (
+        prompt = (
             f"这是你主动决定接的一句话，判断依据：{reason}。\n"
             f"目标消息 ID：{target.get('message_id')}，发送者：{target.get('sender_name')}。\n"
             f"目标内容：{target.get('content')}\n"
-            f"最近群聊：\n" + "\n".join(lines) + "\n"
-            "请像群友一样自然接一句，不要长篇解释；没有表达欲就调用 keep_silent。"
         )
+        if self._use_target_only_prompt():
+            prompt += (
+                "群聊场景和最近对话由 Context Aware 负责注入；"
+                "你只需要针对目标消息自然接一句。\n"
+            )
+        else:
+            prompt += "最近群聊：\n" + "\n".join(lines) + "\n"
+        return prompt + "不要长篇解释；没有表达欲就调用 keep_silent。"
 
     async def on_group_message(
         self, event: AstrMessageEvent
     ) -> AsyncGenerator[Any, None]:
         if not self._bool("enable", True):
+            return
+        if event.is_stopped():
+            # quiet_hours / 黑名单 / 其他前置插件已经拦停，不再判断。
             return
         if event.is_private_chat():
             return
@@ -1266,8 +1287,16 @@ class AttentionGatePlugin(Star):
         state["awaiting_reply"] = True
         state["last_target_sender"] = record["sender_id"]
 
-        event.set_extra(TRIGGER_MARK_EXTRA, {"reason": reason})
-        event.set_extra("active_reply_triggered", True)
+        path = reason.split("(", 1)[0]
+        trigger_payload = {
+            "plugin": PLUGIN_NAME,
+            "reason": reason,
+            "path": path,
+            "target_message_id": str(record["message_id"]),
+            "prefilter": prefilter_reason,
+        }
+        event.set_extra(TRIGGER_MARK_EXTRA, trigger_payload)
+        event.set_extra("active_reply_triggered", trigger_payload)
         if self._bool("quote_target_enabled", True):
             event.set_extra(TRIGGER_QUOTE_EXTRA, str(record["message_id"]))
 

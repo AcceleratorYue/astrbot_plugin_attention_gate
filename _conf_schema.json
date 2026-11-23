@@ -291,6 +291,17 @@
     "type": "int",
     "default": 20
   },
+  "prompt_context_mode": {
+    "description": "主动回复 prompt 上下文模式",
+    "type": "string",
+    "options": [
+      "auto",
+      "target_only",
+      "full"
+    ],
+    "default": "auto",
+    "hint": "auto=检测到 Context Aware 时只发目标+理由，由 Context Aware 注入群聊上下文；full=自己附带最近消息；target_only=始终不附带最近消息"
+  },
   "jev_timeout_seconds": {
     "description": "Jev 请求超时（秒）",
     "type": "float",

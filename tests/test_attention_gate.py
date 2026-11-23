@@ -59,6 +59,9 @@ class FakeEvent:
     def is_private_chat(self) -> bool:
         return False
 
+    def is_stopped(self) -> bool:
+        return False
+
     def get_group_id(self) -> str:
         return "123456789"
 

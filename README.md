@@ -330,6 +330,55 @@ is_good_moment 过低 → pass
 
 这些信息只帮助判断，不会因为“时间到了”自动发消息。
 
+## 与上下文感知增强（Context Aware）联动
+
+主动回复触发时会设置结构化标记：
+
+```json
+{
+  "plugin": "astrbot_plugin_attention_gate",
+  "reason": "value(1.55)",
+  "path": "value",
+  "target_message_id": "123456",
+  "prefilter": "rerank_high(0.37)"
+}
+```
+
+同时设置：
+
+```text
+active_reply_triggered
+attention_quote_target
+```
+
+`astrbot_plugin_context_aware` 会把这类请求识别为 `TRIGGER_ACTIVE`，并在 `strict_mode` 下避免误以为群友在问 Bot。
+
+如果 Context Aware 支持 `attention_quote_target`，场景中会明确写出“你这次主动接的是哪条消息”；没有该支持时，仍能正常识别主动触发，只是不会显示目标消息。
+
+### 避免重复上下文
+
+配置项：
+
+```json
+{
+  "prompt_context_mode": "auto"
+}
+```
+
+- `auto`：检测到 Context Aware 时，注意力插件只发送“目标消息 + 判断理由”，最近群聊交给 Context Aware；
+- `full`：注意力插件自己附带最近消息；
+- `target_only`：始终不附带最近消息。
+
+### 前置停止检查
+
+入口会检查：
+
+```python
+event.is_stopped()
+```
+
+`quiet_hours`、黑名单或其他前置插件已经拦停时，不再调用预筛和 Jev。
+
 ## 引用链路
 
 主动回复触发时，插件会设置：

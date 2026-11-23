@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.1 (2026-11-23)
+
+### 改进
+- `active_reply_triggered` 改为结构化 payload，附带判断原因、路径、目标消息和预筛来源。
+- Context Aware 联动：支持 `attention_quote_target`，场景描述可显示主动回复正在接哪条消息。
+- 新增 `prompt_context_mode`：检测到 Context Aware 时只发送目标与理由，避免重复注入最近上下文。
+- 群聊入口增加 `event.is_stopped()` 检查，尊重 quiet_hours/黑名单等前置拦截。
+- 主动回复引用改由插件自身插入，不再强依赖第三方引用插件补丁。
+
 ## 0.2.0 (2026-11-23)
 
 ### 新增
