@@ -36,7 +36,7 @@ from astrbot.api.message_components import At, Image, Plain, Reply
 from astrbot.api.star import Context, Star, StarTools
 
 PLUGIN_NAME = "astrbot_plugin_attention_gate"
-VERSION = "0.2.2"
+VERSION = "0.2.3"
 LOG = f"[{PLUGIN_NAME}]"
 
 DEFAULT_JEV_URL = "https://tokenrhythm.studio/v1/decision"
@@ -1174,6 +1174,11 @@ class AttentionGatePlugin(Star):
             )
         else:
             prompt += "最近群聊：\n" + "\n".join(lines) + "\n"
+        prompt += (
+            "引用说明：本轮是主动回复，系统会自动引用目标消息。"
+            "不要输出 [quote]、[引用]、[reply] 或 [quote:消息ID] 等引用标签，"
+            "只输出正文。\n"
+        )
         return prompt + "不要长篇解释；没有表达欲就调用 keep_silent。"
 
     async def on_group_message(

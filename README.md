@@ -412,6 +412,8 @@ Reply(id=target_message_id, chain=[])
 ```
 
 因此主动回复会明确引用它正在回应的那条群消息，**不强制依赖第三方引用插件补丁**。  
+主动回复 prompt 也会明确禁止模型输出 `[quote]` / `[引用]` / `[reply]` / `[quote:消息ID]`，避免和自动引用重复。
+
 如果已安装并修补了 `astrbot_plugin_smart_reply_tag`，它会识别已有的 `Reply` 并跳过，不会重复引用。
 
 要求：

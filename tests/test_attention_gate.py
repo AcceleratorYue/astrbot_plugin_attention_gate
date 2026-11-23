@@ -557,6 +557,25 @@ class PrefilterTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("impulse_cue_bypass", reason)
 
 
+class PromptTests(unittest.TestCase):
+    def test_dispatch_prompt_forbids_quote_tags(self) -> None:
+        plugin = object.__new__(AttentionGatePlugin)
+        plugin.config = FakeConfig(
+            {
+                "prompt_context_mode": "full",
+                "context_window": 5,
+            }
+        )
+        prompt = plugin._dispatch_prompt(
+            "123456789",
+            {"buffer": []},
+            {"message_id": "123", "sender_name": "张三", "content": "测试"},
+            "value(1.8)",
+        )
+        self.assertIn("不要输出 [quote]", prompt)
+        self.assertIn("系统会自动引用目标消息", prompt)
+
+
 class QuoteTests(unittest.IsolatedAsyncioTestCase):
     async def test_force_quote_target_inserts_reply(self) -> None:
         from astrbot.api.message_components import Reply
