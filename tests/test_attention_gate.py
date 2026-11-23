@@ -556,6 +556,23 @@ class PrefilterTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(ok)
         self.assertIn("impulse_cue_bypass", reason)
 
+    async def test_profile_embedding_splits_batches(self) -> None:
+        plugin = self._plugin()
+        plugin.config = FakeConfig({"embedding_batch_size": 10})
+        calls = []
+
+        class Provider:
+            async def get_embeddings(self, docs):
+                calls.append(len(docs))
+                return [[1.0, 0.0] for _ in docs]
+
+        plugin._embedding_provider = lambda: Provider()  # type: ignore[assignment]
+        docs = [f"doc{i}" for i in range(12)]
+        vectors = await plugin._get_profile_embeddings("g", docs)
+        self.assertIsNotNone(vectors)
+        self.assertEqual(calls, [10, 2])
+        self.assertEqual(len(vectors), 12)
+
 
 class PromptTests(unittest.TestCase):
     def test_dispatch_prompt_forbids_quote_tags(self) -> None:

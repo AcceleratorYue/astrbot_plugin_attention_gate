@@ -36,7 +36,7 @@ from astrbot.api.message_components import At, Image, Plain, Reply
 from astrbot.api.star import Context, Star, StarTools
 
 PLUGIN_NAME = "astrbot_plugin_attention_gate"
-VERSION = "0.2.3"
+VERSION = "0.2.4"
 LOG = f"[{PLUGIN_NAME}]"
 
 DEFAULT_JEV_URL = "https://tokenrhythm.studio/v1/decision"
@@ -1006,15 +1006,26 @@ class AttentionGatePlugin(Star):
         provider = self._embedding_provider()
         if provider is None:
             return None
+        # DashScope text-embedding-v4 单批最多 10 条；不同 Provider 也可能有
+        # 各自的批大小限制。按配置分批，默认 10，避免 5+7 / 5+8 这类
+        # 话题数组合直接触发 400 InvalidParameter。
+        batch_size = max(1, min(10, _as_int(self._cfg("embedding_batch_size", 10), 10, 1)))
+        timeout = float(self._cfg("embedding_timeout_seconds", 8.0) or 8.0)
+        vectors: list[list[float]] = []
         try:
-            vectors = await asyncio.wait_for(
-                provider.get_embeddings(docs),
-                timeout=float(self._cfg("embedding_timeout_seconds", 8.0) or 8.0),
-            )
+            for start in range(0, len(docs), batch_size):
+                chunk = docs[start : start + batch_size]
+                part = await asyncio.wait_for(
+                    provider.get_embeddings(chunk),
+                    timeout=timeout,
+                )
+                if not isinstance(part, list) or len(part) != len(chunk):
+                    return None
+                vectors.extend(part)
         except Exception as exc:  # noqa: BLE001
             logger.debug("%s 获取兴趣 embedding 失败: %s", LOG, exc)
             return None
-        if not isinstance(vectors, list) or len(vectors) != len(docs):
+        if len(vectors) != len(docs):
             return None
         self._profile_embedding_cache[group_id] = (signature, vectors)
         return vectors
