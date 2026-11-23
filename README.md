@@ -1,6 +1,8 @@
 # 注意力主动回复门控（astrbot_plugin_attention_gate）
 
-用 **Jev（TypeSafe SystemOne）** 判断群消息是否值得主动接话，替代 AstrBot 内置的随机概率主动回复。
+项目仓库：<https://github.com/AcceleratorYue/astrbot_plugin_attention_gate>
+
+用 **Jev（TypeSafe SystemOne / NeoHorse-Jev-4B）** 判断群消息是否值得主动接话，替代 AstrBot 内置的随机概率主动回复。
 
 ## 它做什么
 
