@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.4 (2026-11-24)
+
+### 修复
+- 修复 DashScope text-embedding-v4 单批最多 10 条导致的 `prefilter_unavailable`：兴趣/群话题 embedding 现在按 `embedding_batch_size`（默认 10）分批请求。
+- 增加分批 embedding 回归测试。
+
 ## 0.2.3 (2026-11-23)
 
 ### 提示词

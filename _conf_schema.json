@@ -405,6 +405,12 @@
     "type": "float",
     "default": 0.42
   },
+  "embedding_batch_size": {
+    "description": "Embedding 批次大小",
+    "type": "int",
+    "default": 10,
+    "hint": "DashScope text-embedding-v4 单批最多 10；超过 10 会自动按 10 分批"
+  },
   "embedding_low_threshold": {
     "description": "Embedding 低相关阈值",
     "type": "float",

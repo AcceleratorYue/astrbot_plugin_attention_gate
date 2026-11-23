@@ -223,11 +223,14 @@ embedding 低于低阈值
   "rerank_provider_id": "bailian_rerank",
   "embedding_threshold": 0.42,
   "embedding_low_threshold": 0.30,
+  "embedding_batch_size": 10,
   "rerank_threshold": 0.30
 }
 ```
 
 如果 embedding/rerank Provider 不可用，插件不会直接丢弃消息，而是标记 `prefilter_unavailable` 并交给 Jev，避免把主判断一起弄坏。
+
+DashScope `text-embedding-v4` 单批最多 10 条，`embedding_batch_size` 用于分批；人格兴趣 + 群话题超过 10 条时会自动拆成多批。
 
 ## 第三层：突发回复欲望（is_impulse）
 
