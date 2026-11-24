@@ -36,7 +36,7 @@ from astrbot.api.message_components import At, Image, Plain, Reply
 from astrbot.api.star import Context, Star, StarTools
 
 PLUGIN_NAME = "astrbot_plugin_attention_gate"
-VERSION = "0.2.6"
+VERSION = "0.3.0"
 LOG = f"[{PLUGIN_NAME}]"
 
 DEFAULT_JEV_URL = "https://tokenrhythm.studio/v1/decision"
@@ -182,14 +182,29 @@ DEFAULT_QUESTIONS: dict[str, Any] = {
         "type": "noul",
         "instructions": "目标消息是否在点名或直接对当前机器人说话？",
         "criteria": {
-            "true": "叫了它的名字/常用称呼，或话头明显是对它说的",
-            "false": "在说别人、普通群聊、或指向其他机器人",
+            "true": "明确叫了机器人名字/常用称呼，或 @/引用机器人；仅仅用“你”指代群友不算",
+            "false": "在说别人、普通群聊、用“你”指代另一个群友，或指向其他机器人",
+        },
+    },
+    "is_directed_elsewhere": {
+        "type": "noul",
+        "instructions": "目标消息是否明确在跟另一个具体的人或另一个 Bot 说话，而不是对群聊整体说？必须能从上下文指出具体对象。",
+        "criteria": {
+            "true": "一对一互聊、回应某个群友、叫某个群友的名字、指挥另一个 Bot；其他人插话会打断对话",
+            "false": "面向群聊的感叹、玩梗、开放话题，谁接都自然；只是泛泛用“你/大家”，或明确在对当前机器人说话",
+        },
+    },
+    "has_reply_hook": {
+        "type": "noul",
+        "instructions": "目标消息是否有足够的信息、情绪或话题钩子，让没被点名的人接一句会自然？",
+        "criteria": {
+            "true": "有具体内容、吐槽点、问题、情绪或可接的梗，能自然补一句自己的看法",
+            "false": "只有单字、复读、口号、纯图片/表情、无上下文短句，接话只能硬凑或追问",
         },
     },
     "is_persona_fit": {
         "type": "noul",
-        "instructions": "目标消息是否符合机器人的全局人格兴趣？",
-        "criteria": {
+        "instructions": "目标消息是否符合机器人的全局人格兴趣？",        "criteria": {
             "true": "话题落在全局人格兴趣中，例如解题、吃、鲸鱼/摸鱼、被夸、情绪陪伴，接话会自然有趣",
             "false": "话题与人格兴趣无关，接话会显得突兀",
         },
@@ -253,7 +268,10 @@ DEFAULT_THRESHOLDS = {
     "is_good_moment": 0.45,
     "is_continuation": 0.50,
     "is_risky": 0.50,
-    "reply_value": 1.50,
+    "is_directed_elsewhere": 0.65,
+    "directed_elsewhere_hook_max": 0.70,
+    "has_reply_hook": 0.60,
+    "reply_value": 1.65,
     "continuation_reply_value": 1.20,
     "is_impulse": 0.72,
     "impulse_reply_value": 1.20,
@@ -470,6 +488,8 @@ def decide_answers(
     score: float | None,
     continuation: bool,
     thresholds: dict[str, float] | None = None,
+    *,
+    addressed_to_bot: bool = False,
 ) -> tuple[bool, str]:
     """纯函数：把 Jev 的答案映射成 act / pass。"""
 
@@ -484,12 +504,27 @@ def decide_answers(
     mentioned = _as_float(nouls.get("is_mentioned"), 0.0)
     continuation_p = _as_float(nouls.get("is_continuation"), 0.0)
     impulse = _as_float(nouls.get("is_impulse"), 0.0)
+    directed_elsewhere = _as_float(nouls.get("is_directed_elsewhere"), 0.0)
+    # 问题被关闭/旧配置没有该问题时，hook 默认放行，避免误杀全部消息。
+    reply_hook = _as_float(nouls.get("has_reply_hook"), 1.0)
     value = _as_float(score, 0.0)
 
     if risk >= th["is_risky"]:
         return False, f"risk({risk:.2f})"
     if moment < th["is_good_moment"]:
         return False, f"moment({moment:.2f})"
+
+    # 这条消息是否已经明确属于别人：一对一互聊、指挥另一个 Bot、
+    # 或明显在回应某个人。即使分值高，也不应插话。
+    # 明确叫到当前 Bot 名字时不套用这两个硬门。
+    if not addressed_to_bot:
+        if (
+            directed_elsewhere >= th["is_directed_elsewhere"]
+            and reply_hook < th["directed_elsewhere_hook_max"]
+        ):
+            return False, f"directed_elsewhere({directed_elsewhere:.2f})"
+        if reply_hook < th["has_reply_hook"]:
+            return False, f"no_reply_hook({reply_hook:.2f})"
 
     # 第三层：突发回复欲望。不需要兴趣匹配，但风险要求更严。
     if (
@@ -612,6 +647,9 @@ class AttentionGatePlugin(Star):
             "impulse_threshold": "is_impulse",
             "impulse_value_threshold": "impulse_reply_value",
             "impulse_risk_max": "impulse_risk",
+            "directed_elsewhere_threshold": "is_directed_elsewhere",
+            "directed_elsewhere_hook_max": "directed_elsewhere_hook_max",
+            "reply_hook_threshold": "has_reply_hook",
         }
         for field, key in scalar_keys.items():
             value = self._cfg(field, None)
@@ -1096,6 +1134,23 @@ class AttentionGatePlugin(Star):
             return True, f"impulse_cue_bypass(rerank={rerank:.2f})"
         return False, f"rerank_low({rerank:.2f})"
 
+    def _bot_names(self) -> list[str]:
+        raw = self._cfg("bot_names", None)
+        names: list[str] = []
+        if isinstance(raw, list):
+            names = [str(x).strip() for x in raw if str(x).strip()]
+        if not names:
+            match = re.search(r"我是([^\s，,。；;：:]{1,8})", self._persona())
+            if match:
+                names = [match.group(1)]
+        return names
+
+    def _addressed_to_bot_by_name(self, text: str) -> bool:
+        lowered = (text or "").lower()
+        return any(
+            len(name) >= 2 and name.lower() in lowered for name in self._bot_names()
+        )
+
     async def _judge(
         self,
         event: AstrMessageEvent,
@@ -1121,7 +1176,15 @@ class AttentionGatePlugin(Star):
             return False, "jev_bad_response", {}
         nouls, score = extract_nouls(answers)
         continuation = self._continuation(state, str(event.get_sender_id() or ""))
-        act, reason = decide_answers(nouls, score, continuation, self._thresholds())
+        act, reason = decide_answers(
+            nouls,
+            score,
+            continuation,
+            self._thresholds(),
+            addressed_to_bot=self._addressed_to_bot_by_name(
+                str(target.get("content") or "")
+            ),
+        )
         return act, reason, {
             "nouls": nouls,
             "reply_value": score,

@@ -273,6 +273,8 @@ is_impulse 过线
 | 字段 | 含义 |
 |---|---|
 | `is_mentioned` | 是否点名/直接对 Bot 说话 |
+| `is_directed_elsewhere` | 是否明确在跟另一个具体的人或另一个 Bot 说话 |
+| `has_reply_hook` | 是否有足够的信息/情绪/话题钩子，让旁人接话自然 |
 | `is_persona_fit` | 是否符合全局人格兴趣 |
 | `is_group_topic_fit` | 是否符合当前群话题 |
 | `is_good_moment` | 现在插话是否自然 |
@@ -280,6 +282,23 @@ is_impulse 过线
 | `is_impulse` | 是否有突发接话欲望 |
 | `is_risky` | 是否有明显风险 |
 | `reply_value` | 0~3 的主动回复价值 |
+
+### 方向与信息密度硬门
+
+这两项不是靠提高 `reply_value` 解决的：
+
+- `is_directed_elsewhere` 高，且 `has_reply_hook` 低于 `directed_elsewhere_hook_max`：
+  ```text
+  明确是一对一互聊 / 回应某个群友 / 指挥另一个 Bot
+  → 直接 pass
+  ```
+- `has_reply_hook` 低于 `reply_hook_threshold`：
+  ```text
+  单字、复读、口号、纯图片/表情、没有上下文的短句
+  → 直接 pass
+  ```
+
+如果消息明确叫到 `bot_names` 里的名字，视为对当前 Bot 说话，不套用这两个硬门。
 
 ### 阈值
 
@@ -296,6 +315,18 @@ mentioned_threshold
 impulse_threshold
 impulse_value_threshold
 impulse_risk_max
+directed_elsewhere_threshold
+directed_elsewhere_hook_max
+reply_hook_threshold
+```
+
+当前建议/默认：
+
+```text
+reply_value_threshold         1.65
+reply_hook_threshold          0.60
+directed_elsewhere_threshold  0.65
+directed_elsewhere_hook_max   0.70
 ```
 
 ### 决定规则
@@ -303,6 +334,17 @@ impulse_risk_max
 ```text
 is_risky 过高 → pass
 is_good_moment 过低 → pass
+
+方向门：
+  不是明确叫 Bot 名字
+  且 is_directed_elsewhere 高
+  且 has_reply_hook 低于 directed_elsewhere_hook_max
+  → pass
+
+信息密度门：
+  不是明确叫 Bot 名字
+  且 has_reply_hook 低于 reply_hook_threshold
+  → pass
 
 冲动路径：
   is_impulse 高

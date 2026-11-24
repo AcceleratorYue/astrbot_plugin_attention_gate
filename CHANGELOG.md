@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.0 (2026-11-24)
+
+### 新增
+- 增加 `is_directed_elsewhere` 判断：一对一互聊、回应某个群友、指挥另一个 Bot 时直接 pass。
+- 增加 `has_reply_hook` 判断：单字、复读、口号、纯图片、无上下文短句即使分值高也不接。
+- 增加 `bot_names`：明确叫到 Bot 名字时视为对当前 Bot 说话，不被方向门误拦。
+- 增加 `directed_elsewhere_threshold`、`directed_elsewhere_hook_max`、`reply_hook_threshold` 配置。
+- 默认 `reply_value_threshold` 调整为 1.65。
+
 ## 0.2.6 (2026-11-24)
 
 ### 修复

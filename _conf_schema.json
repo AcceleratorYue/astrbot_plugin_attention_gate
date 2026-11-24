@@ -53,6 +53,17 @@
     "type": "text",
     "default": "我是鲸鲸，一只鲸鱼娘。性格活泼、嘴硬心软、会傲娇，但很少真的生气；我说话短，先给情绪反应，再给内容；我不会主动刷屏，也不会为了参与硬找话说。"
   },
+  "bot_names": {
+    "description": "Bot 的称呼",
+    "type": "list",
+    "items": {
+      "type": "string"
+    },
+    "default": [
+      "鲸鲸"
+    ],
+    "hint": "消息里明确叫到这些名字时，视为对当前 Bot 说话；不会被“指向别人”硬门拦截"
+  },
   "interest_groups": {
     "description": "人格兴趣层（全局）",
     "type": "template_list",
@@ -355,7 +366,7 @@
   "reply_value_threshold": {
     "description": "回复价值阈值（0~3）",
     "type": "float",
-    "default": 1.5
+    "default": 1.65
   },
   "continuation_value_threshold": {
     "description": "接话延续价值阈值",
@@ -366,6 +377,18 @@
     "description": "点名阈值",
     "type": "float",
     "default": 0.6
+  },
+  "directed_elsewhere_threshold": {
+    "description": "明确指向别人的上限（越高越严格）",
+    "type": "float",
+    "default": 0.65,
+    "hint": "一对一互聊、回应别人、指挥别的 Bot 超过该值时直接 pass"
+  },
+  "reply_hook_threshold": {
+    "description": "可接话钩子阈值",
+    "type": "float",
+    "default": 0.6,
+    "hint": "信息密度/情绪钩子低于该值时直接 pass；明确点名 Bot 的消息不受影响"
   },
   "impulse_enabled": {
     "description": "启用突发回复欲望层",
@@ -447,8 +470,28 @@
         "enabled": true,
         "type": "noul",
         "instructions": "目标消息是否在点名或直接对当前机器人说话？",
-        "true_criteria": "叫了它的名字/常用称呼，或话头明显是对它说的",
-        "false_criteria": "在说别人、普通群聊、或指向其他机器人",
+        "true_criteria": "明确叫了机器人名字/常用称呼，或 @/引用机器人；仅仅用“你”指代群友不算",
+        "false_criteria": "在说别人、普通群聊、用“你”指代另一个群友，或指向其他机器人",
+        "score_levels": []
+      },
+      {
+        "__template_key": "question",
+        "id": "is_directed_elsewhere",
+        "enabled": true,
+        "type": "noul",
+        "instructions": "目标消息是否明确在跟另一个具体的人或另一个 Bot 说话，而不是对群聊整体说？必须能从上下文指出具体对象。",
+        "true_criteria": "一对一互聊、回应某个群友、叫某个群友的名字、指挥另一个 Bot；其他人插话会打断对话",
+        "false_criteria": "面向群聊的感叹、玩梗、开放话题，谁接都自然；只是泛泛用“你/大家”，或明确在对当前机器人说话",
+        "score_levels": []
+      },
+      {
+        "__template_key": "question",
+        "id": "has_reply_hook",
+        "enabled": true,
+        "type": "noul",
+        "instructions": "目标消息是否有足够的信息、情绪或话题钩子，让没被点名的人接一句会自然？",
+        "true_criteria": "有具体内容、吐槽点、问题、情绪或可接的梗，能自然补一句自己的看法",
+        "false_criteria": "只有单字、复读、口号、纯图片/表情、无上下文短句，接话只能硬凑或追问",
         "score_levels": []
       },
       {
@@ -579,5 +622,11 @@
         }
       }
     }
+  },
+  "directed_elsewhere_hook_max": {
+    "description": "指向别人时仍允许的最大接话钩子",
+    "type": "float",
+    "default": 0.7,
+    "hint": "只有 directed_elsewhere 高且回复钩子低于该值时才直接 pass；钩子足够高仍允许判断"
   }
 }
