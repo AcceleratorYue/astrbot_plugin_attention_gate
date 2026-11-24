@@ -353,6 +353,43 @@ class DecideTests(unittest.TestCase):
         self.assertTrue(act)
         self.assertIn("value", reason)
 
+    def test_incomplete_turn_passes(self) -> None:
+        act, reason = decide_answers(
+            {
+                "is_persona_fit": 0.9,
+                "is_group_topic_fit": 0.9,
+                "is_good_moment": 0.9,
+                "is_risky": 0.1,
+                "is_directed_elsewhere": 0.2,
+                "has_reply_hook": 0.9,
+                "is_answer_seeking": 0.1,
+                "is_complete_turn": 0.2,
+            },
+            2.8,
+            continuation=False,
+        )
+        self.assertFalse(act)
+        self.assertIn("incomplete_turn", reason)
+
+    def test_incomplete_turn_ignored_when_named(self) -> None:
+        act, reason = decide_answers(
+            {
+                "is_persona_fit": 0.9,
+                "is_group_topic_fit": 0.9,
+                "is_good_moment": 0.9,
+                "is_risky": 0.1,
+                "is_directed_elsewhere": 0.2,
+                "has_reply_hook": 0.9,
+                "is_answer_seeking": 0.1,
+                "is_complete_turn": 0.2,
+            },
+            2.8,
+            continuation=False,
+            addressed_to_bot=True,
+        )
+        self.assertTrue(act)
+        self.assertIn("value", reason)
+
     def test_continuation_can_act_with_lower_value(self) -> None:
         act, _ = decide_answers(
             {
@@ -817,6 +854,19 @@ class StateTests(unittest.TestCase):
         state["cooldown_until"] = 100.0
         self.assertTrue(self.plugin._in_cooldown(state, 99.0))
         self.assertFalse(self.plugin._in_cooldown(state, 100.0))
+
+    def test_target_turn_groups_same_sender(self) -> None:
+        state = self.plugin._state("g")
+        state["buffer"].extend(
+            [
+                {"message_id": "1", "sender_id": "a", "content": "前半句", "ts": 100.0},
+                {"message_id": "2", "sender_id": "b", "content": "插话", "ts": 101.0},
+                {"message_id": "3", "sender_id": "a", "content": "后半句", "ts": 102.0},
+            ]
+        )
+        target = {"message_id": "3", "sender_id": "a", "content": "后半句", "ts": 102.0}
+        turn = self.plugin._target_turn(state, target)
+        self.assertEqual([x["content"] for x in turn], ["后半句"])
 
 
 if __name__ == "__main__":
