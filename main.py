@@ -36,7 +36,7 @@ from astrbot.api.message_components import At, Image, Plain, Reply
 from astrbot.api.star import Context, Star, StarTools
 
 PLUGIN_NAME = "astrbot_plugin_attention_gate"
-VERSION = "0.2.5"
+VERSION = "0.2.6"
 LOG = f"[{PLUGIN_NAME}]"
 
 DEFAULT_JEV_URL = "https://tokenrhythm.studio/v1/decision"
@@ -1264,9 +1264,22 @@ class AttentionGatePlugin(Star):
         if self._hour_limit_reached(state, now):
             return
 
+        # 并发消息可能在 Jev 判断期间同时通过上面的检查；先原子占住冷却，
+        # 判断为 pass/未发送时再恢复原值，避免同一秒生成多条主动回复。
+        cooldown_prev = _as_float(state.get("cooldown_until"), 0.0)
+        cooldown_seconds = max(
+            0, _as_int(self._cfg("cooldown_seconds", 120), 120, 0)
+        )
+        state["cooldown_until"] = now + cooldown_seconds
+
         target = record
-        prefilter_ok, prefilter_reason = await self._prefilter(group_id, record)
+        try:
+            prefilter_ok, prefilter_reason = await self._prefilter(group_id, record)
+        except Exception:
+            state["cooldown_until"] = cooldown_prev
+            raise
         if not prefilter_ok:
+            state["cooldown_until"] = cooldown_prev
             self._ledger(
                 {
                     "ts": time.time(),
@@ -1284,7 +1297,11 @@ class AttentionGatePlugin(Star):
             )
             return
 
-        act, reason, detail = await self._judge(event, group_id, state, target)
+        try:
+            act, reason, detail = await self._judge(event, group_id, state, target)
+        except Exception:
+            state["cooldown_until"] = cooldown_prev
+            raise
         dry_run = self._bool("dry_run", True)
         ledger = {
             "ts": time.time(),
@@ -1301,9 +1318,11 @@ class AttentionGatePlugin(Star):
             "judge": detail,
         }
         if not act:
+            state["cooldown_until"] = cooldown_prev
             self._ledger(ledger)
             return
         if dry_run:
+            state["cooldown_until"] = cooldown_prev
             ledger["action"] = "dry_run"
             self._ledger(ledger)
             logger.info("%s dry-run act: %s | %s", LOG, record["content"][:50], reason)
@@ -1311,14 +1330,16 @@ class AttentionGatePlugin(Star):
 
         conversation, _cid = await self._current_conversation(event)
         if conversation is None:
+            state["cooldown_until"] = cooldown_prev
             ledger["action"] = "skip_no_conversation"
             self._ledger(ledger)
             return
 
-        state["cooldown_until"] = now + max(0, _as_int(self._cfg("cooldown_seconds", 120), 120, 0))
-        state["dispatches"].append(now)
+        dispatch_now = time.time()
+        state["cooldown_until"] = dispatch_now + cooldown_seconds
+        state["dispatches"].append(dispatch_now)
         state["last_dispatch_sender"] = record["sender_id"]
-        state["last_proactive_at"] = now
+        state["last_proactive_at"] = dispatch_now
         state["messages_since_proactive"] = 0
         state["last_proactive_got_reply"] = False
         state["awaiting_reply"] = True
