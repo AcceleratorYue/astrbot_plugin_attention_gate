@@ -341,6 +341,13 @@ reply_hook_threshold
 answer_seeking_threshold
 complete_turn_threshold
 active_reply_settle_seconds
+active_reply_wait_max_messages
+density_window_seconds
+density_max_dispatches
+post_reply_penalty_seconds
+post_reply_threshold_penalty
+user_attention_window_seconds
+user_repeat_penalty
 ```
 
 当前建议/默认：
@@ -353,6 +360,13 @@ directed_elsewhere_hook_max   0.70
 answer_seeking_threshold      0.65
 complete_turn_threshold       0.55
 active_reply_settle_seconds   10.0
+active_reply_wait_max_messages 20
+density_window_seconds        900
+density_max_dispatches        2
+post_reply_penalty_seconds    600
+post_reply_threshold_penalty  0.2
+user_attention_window_seconds 1800
+user_repeat_penalty           0.15
 ```
 
 ### 决定规则
@@ -431,6 +445,61 @@ is_good_moment 过低 → pass
 ```
 
 因此它不会因为“肥鱼”“气人”这种单个词，就直接对一句半截话生成回复。
+
+## 回复密度、未回复缓存与疲劳
+
+### 回复密度
+
+除了 `cooldown_seconds` 和 `hourly_limit`，还有短窗口硬限制：
+
+```json
+"density_window_seconds": 900,
+"density_max_dispatches": 2
+```
+
+含义：15 分钟内最多主动回复 2 次。  
+即使每小时总额度没用完，也不能短时间连续刷屏。
+
+### 未回复消息缓存
+
+每个群维护一份 `unanswered` 最近消息：
+
+- 新消息进入时记录；
+- Bot 正常回复/主动回复后清空；
+- Jev 和生成 prompt 会看到“近期尚未回复的群聊”；
+- 避免把一句碎片从话题里割出来判断。
+
+### 等待窗口批次
+
+等待期间到达的消息会形成一个 batch：
+
+```json
+"active_reply_wait_max_messages": 20
+```
+
+Jev 和生成 prompt 会看到“等待窗口内同批到达的消息”，不只拿最后一条。
+
+### 回复后疲劳
+
+刚主动回复后的窗口内提高接话门槛：
+
+```json
+"post_reply_penalty_seconds": 600,
+"post_reply_threshold_penalty": 0.2
+```
+
+避免 Bot 刚说完又连续抢话。
+
+### 最小用户注意力
+
+同一用户近期触发过主动回复时，提高其后续触发门槛：
+
+```json
+"user_attention_window_seconds": 1800,
+"user_repeat_penalty": 0.15
+```
+
+避免 Bot 一直盯着同一个用户接话。明确叫到 Bot 名字的消息不受该惩罚影响。
 
 ## 与上下文感知增强（Context Aware）联动
 

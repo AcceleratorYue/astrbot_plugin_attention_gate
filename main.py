@@ -36,7 +36,7 @@ from astrbot.api.message_components import At, Image, Plain, Reply
 from astrbot.api.star import Context, Star, StarTools
 
 PLUGIN_NAME = "astrbot_plugin_attention_gate"
-VERSION = "0.4.1"
+VERSION = "0.5.0"
 LOG = f"[{PLUGIN_NAME}]"
 
 DEFAULT_JEV_URL = "https://tokenrhythm.studio/v1/decision"
@@ -766,6 +766,10 @@ class AttentionGatePlugin(Star):
                 "awaiting_reply": False,
                 "created_at": time.time(),
                 "settle_token": 0,
+                "wait_anchor_at": 0.0,
+                "user_dispatches": {},
+                "unanswered": deque(maxlen=30),
+                "last_bot_reply": "",
             }
             self._states[group_id] = state
         return state
@@ -810,6 +814,11 @@ class AttentionGatePlugin(Star):
     def _append_buffer(self, group_id: str, record: dict[str, Any]) -> None:
         self._state(group_id)["buffer"].append(record)
 
+    def _note_unanswered(self, state: dict[str, Any], record: dict[str, Any]) -> None:
+        if record.get("is_self"):
+            return
+        state["unanswered"].append(record)
+
     def _target_turn(
         self, state: dict[str, Any], target: dict[str, Any]
     ) -> list[dict[str, Any]]:
@@ -853,6 +862,15 @@ class AttentionGatePlugin(Star):
         self._trim_dispatches(state, now)
         limit = _as_int(self._cfg("hourly_limit", 15), 15, 1)
         return len(state["dispatches"]) >= limit
+
+    def _density_limit_reached(self, state: dict[str, Any], now: float) -> bool:
+        """短窗口回复密度限制，避免用完整小时额度连续刷屏。"""
+        window = _as_int(self._cfg("density_window_seconds", 900), 900, 0)
+        if window <= 0:
+            return False
+        limit = _as_int(self._cfg("density_max_dispatches", 2), 2, 1)
+        recent = [t for t in state.get("dispatches", ()) if now - t < window]
+        return len(recent) >= limit
 
     # ------------------------------------------------------------------
     # 事件判断
@@ -952,6 +970,15 @@ class AttentionGatePlugin(Star):
                 self._group_profile(group_id).get("topics", [])
             ),
             "recent_conversation": lines,
+            "recent_unanswered": [
+                {
+                    "time": item.get("time", ""),
+                    "sender": item.get("sender_name", ""),
+                    "content": item.get("content", ""),
+                }
+                for item in list(state.get("unanswered", ()))[-10:]
+            ],
+            "last_bot_reply": str(state.get("last_bot_reply") or "")[:500],
             "target_message": {
                 "message_id": target.get("message_id", ""),
                 "sender": target.get("sender_name", ""),
@@ -959,6 +986,14 @@ class AttentionGatePlugin(Star):
                 "turn": [
                     {"time": item.get("time", ""), "content": item.get("content", "")}
                     for item in self._target_turn(state, target)
+                ],
+                "wait_batch": [
+                    {
+                        "sender": item.get("sender_name", ""),
+                        "content": item.get("content", ""),
+                    }
+                    for item in (target.get("batch") or [])
+                    if isinstance(item, dict)
                 ],
             },
             "continuation": "yes" if continuation else "no",
@@ -1231,6 +1266,36 @@ class AttentionGatePlugin(Star):
             len(name) >= 2 and name.lower() in lowered for name in self._bot_names()
         )
 
+    def _thresholds_for_state(
+        self, state: dict[str, Any], sender_id: str = ""
+    ) -> dict[str, float]:
+        result = self._thresholds()
+        last = _as_float(state.get("last_proactive_at"), 0.0)
+        window = _as_int(
+            self._cfg("post_reply_penalty_seconds", 600), 600, 0
+        )
+        penalty = _as_float(self._cfg("post_reply_threshold_penalty", 0.2), 0.2)
+        if last and window and time.time() - last < window and penalty > 0:
+            result["reply_value"] = result.get("reply_value", 1.5) + penalty
+            result["continuation_reply_value"] = (
+                result.get("continuation_reply_value", 1.2) + penalty
+            )
+        attention_window = _as_int(
+            self._cfg("user_attention_window_seconds", 1800), 1800, 0
+        )
+        repeat_penalty = _as_float(
+            self._cfg("user_repeat_penalty", 0.15), 0.15
+        )
+        if sender_id and attention_window and repeat_penalty > 0:
+            times = state.get("user_dispatches", {}).get(sender_id, ())
+            now = time.time()
+            recent = [t for t in times if now - t < attention_window]
+            if recent:
+                result["reply_value"] = result.get("reply_value", 1.5) + min(
+                    0.4, repeat_penalty * len(recent)
+                )
+        return result
+
     async def _judge(
         self,
         event: AstrMessageEvent,
@@ -1256,14 +1321,22 @@ class AttentionGatePlugin(Star):
             return False, "jev_bad_response", {}
         nouls, score = extract_nouls(answers)
         continuation = self._continuation(state, str(event.get_sender_id() or ""))
+        addressed_to_bot = self._addressed_to_bot_by_name(
+            str(target.get("content") or "")
+        )
+        thresholds = (
+            self._thresholds()
+            if addressed_to_bot
+            else self._thresholds_for_state(
+                state, str(event.get_sender_id() or "")
+            )
+        )
         act, reason = decide_answers(
             nouls,
             score,
             continuation,
-            self._thresholds(),
-            addressed_to_bot=self._addressed_to_bot_by_name(
-                str(target.get("content") or "")
-            ),
+            thresholds,
+            addressed_to_bot=addressed_to_bot,
         )
         return act, reason, {
             "nouls": nouls,
@@ -1349,6 +1422,21 @@ class AttentionGatePlugin(Star):
                 for item in turn
                 if isinstance(item, dict)
             ) + "\n"
+        batch = target.get("batch") or []
+        if isinstance(batch, list) and len(batch) > 1:
+            prompt += "等待窗口内同批到达的消息：\n" + "\n".join(
+                f"- {item.get('sender_name', '')}: {item.get('content', '')}"
+                for item in batch
+                if isinstance(item, dict)
+            ) + "\n"
+        unanswered = list(state.get("unanswered", ()))[-6:]
+        if unanswered:
+            prompt += "近期尚未回复的群聊：\n" + "\n".join(
+                f"- {item.get('sender_name', '')}: {item.get('content', '')}"
+                for item in unanswered
+                if isinstance(item, dict)
+                and str(item.get("message_id") or "") != str(target.get("message_id") or "")
+            ) + "\n"
         prompt += (
             "先读懂这段对话在聊什么，再回应目标的完整意思；"
             "不要只抓某个词做字面反应，也不要接半句或补刀。"
@@ -1390,6 +1478,7 @@ class AttentionGatePlugin(Star):
         if record is None:
             return
         state = self._state(group_id)
+        self._note_unanswered(state, record)
         state["messages_since_proactive"] = _as_int(
             state.get("messages_since_proactive"), 0, 0
         ) + 1
@@ -1419,14 +1508,28 @@ class AttentionGatePlugin(Star):
         if settle > 0:
             token = _as_int(state.get("settle_token"), 0) + 1
             state["settle_token"] = token
+            if not _as_float(state.get("wait_anchor_at"), 0.0):
+                state["wait_anchor_at"] = time.time()
             await asyncio.sleep(settle)
             if _as_int(state.get("settle_token"), 0) != token:
                 return
+            anchor_at = _as_float(state.pop("wait_anchor_at", 0.0), 0.0)
+            if anchor_at:
+                batch_max = _as_int(
+                    self._cfg("active_reply_wait_max_messages", 20), 20, 1
+                )
+                record["batch"] = [
+                    item
+                    for item in list(state["buffer"])
+                    if _as_float(item.get("ts"), 0.0) >= anchor_at
+                ][-batch_max:]
 
         now = time.time()
         if self._in_cooldown(state, now):
             return
         if self._hour_limit_reached(state, now):
+            return
+        if self._density_limit_reached(state, now):
             return
 
         # 并发消息可能在 Jev 判断期间同时通过上面的检查；先原子占住冷却，
@@ -1503,6 +1606,9 @@ class AttentionGatePlugin(Star):
         dispatch_now = time.time()
         state["cooldown_until"] = dispatch_now + cooldown_seconds
         state["dispatches"].append(dispatch_now)
+        state["user_dispatches"].setdefault(
+            str(record.get("sender_id") or ""), deque(maxlen=20)
+        ).append(dispatch_now)
         state["last_dispatch_sender"] = record["sender_id"]
         state["last_proactive_at"] = dispatch_now
         state["messages_since_proactive"] = 0
@@ -1602,6 +1708,8 @@ class AttentionGatePlugin(Star):
             "is_bot": False,
         }
         state["buffer"].append(record)
+        state["unanswered"].clear()
+        state["last_bot_reply"] = text[:500]
         state["last_bot_at"] = time.time()
         state["last_bot_sender"] = str(
             event.get_sender_id()

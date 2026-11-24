@@ -855,6 +855,59 @@ class StateTests(unittest.TestCase):
         self.assertTrue(self.plugin._in_cooldown(state, 99.0))
         self.assertFalse(self.plugin._in_cooldown(state, 100.0))
 
+    def test_density_limit(self) -> None:
+        self.plugin.config = FakeConfig(
+            {"density_window_seconds": 900, "density_max_dispatches": 2}
+        )
+        state = self.plugin._state("g")
+        state["dispatches"].extend([1000.0, 1100.0])
+        self.assertTrue(self.plugin._density_limit_reached(state, 1200.0))
+        self.assertFalse(self.plugin._density_limit_reached(state, 1901.0))
+
+    def test_unanswered_cache(self) -> None:
+        state = self.plugin._state("g")
+        self.plugin._note_unanswered(
+            state,
+            {"message_id": "1", "sender_name": "张三", "content": "还没接的话"},
+        )
+        self.plugin._note_unanswered(
+            state,
+            {"message_id": "2", "sender_name": "鲸鲸", "content": "自己", "is_self": True},
+        )
+        self.assertEqual(len(state["unanswered"]), 1)
+        self.assertEqual(state["unanswered"][0]["content"], "还没接的话")
+
+    def test_post_reply_penalty(self) -> None:
+        self.plugin.config = FakeConfig(
+            {
+                "reply_value_threshold": 1.8,
+                "post_reply_penalty_seconds": 600,
+                "post_reply_threshold_penalty": 0.2,
+            }
+        )
+        state = self.plugin._state("g")
+        state["last_proactive_at"] = __import__("time").time()
+        th = self.plugin._thresholds_for_state(state)
+        self.assertAlmostEqual(th["reply_value"], 2.0)
+
+    def test_user_attention_penalty(self) -> None:
+        self.plugin.config = FakeConfig(
+            {
+                "reply_value_threshold": 1.8,
+                "user_attention_window_seconds": 1800,
+                "user_repeat_penalty": 0.15,
+            }
+        )
+        state = self.plugin._state("g")
+        state["user_dispatches"]["u1"] = __import__("collections").deque(
+            [__import__("time").time()]
+        )
+        th = self.plugin._thresholds_for_state(state, "u1")
+        self.assertAlmostEqual(th["reply_value"], 1.95)
+        self.assertAlmostEqual(
+            self.plugin._thresholds_for_state(state, "u2")["reply_value"], 1.8
+        )
+
     def test_target_turn_groups_same_sender(self) -> None:
         state = self.plugin._state("g")
         state["buffer"].extend(

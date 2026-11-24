@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.0 (2026-11-24)
+
+### 借鉴 group_chat_plus 的优化
+- P0：新增短窗口回复密度限制 `density_window_seconds` / `density_max_dispatches`。
+- P0：新增未回复消息缓存 `unanswered`，并注入 Jev/生成 prompt。
+- P1：等待窗口增加批次快照 `active_reply_wait_max_messages`，Jev 和生成 prompt 可看到同批消息。
+- P1：新增主动回复后的动态阈值惩罚（疲劳窗口）。
+- P2：新增最小用户注意力降权，同一用户近期反复触发时提高门槛。
+- 所有新机制均为纯本地状态，不依赖 group_chat_plus。
+
 ## 0.4.1 (2026-11-24)
 
 ### 修复
