@@ -253,6 +253,71 @@ class DecideTests(unittest.TestCase):
         self.assertFalse(act)
         self.assertIn("moment", reason)
 
+    def test_directed_to_other_passes_even_with_high_value(self) -> None:
+        act, reason = decide_answers(
+            {
+                "is_mentioned": 0.9,
+                "is_persona_fit": 0.9,
+                "is_group_topic_fit": 0.9,
+                "is_good_moment": 0.9,
+                "is_risky": 0.1,
+                "is_directed_elsewhere": 0.9,
+                "has_reply_hook": 0.3,
+            },
+            2.8,
+            continuation=False,
+        )
+        self.assertFalse(act)
+        self.assertIn("directed_elsewhere", reason)
+
+    def test_low_reply_hook_passes(self) -> None:
+        act, reason = decide_answers(
+            {
+                "is_persona_fit": 0.9,
+                "is_group_topic_fit": 0.9,
+                "is_good_moment": 0.9,
+                "is_risky": 0.1,
+                "has_reply_hook": 0.2,
+            },
+            2.8,
+            continuation=False,
+        )
+        self.assertFalse(act)
+        self.assertIn("no_reply_hook", reason)
+
+    def test_high_value_with_hook_and_no_direction_acts(self) -> None:
+        act, reason = decide_answers(
+            {
+                "is_persona_fit": 0.9,
+                "is_group_topic_fit": 0.9,
+                "is_good_moment": 0.9,
+                "is_risky": 0.1,
+                "is_directed_elsewhere": 0.2,
+                "has_reply_hook": 0.8,
+            },
+            2.8,
+            continuation=False,
+        )
+        self.assertTrue(act)
+        self.assertIn("value", reason)
+
+    def test_addressed_to_bot_by_name_bypasses_directed_gate(self) -> None:
+        act, reason = decide_answers(
+            {
+                "is_persona_fit": 0.9,
+                "is_group_topic_fit": 0.9,
+                "is_good_moment": 0.9,
+                "is_risky": 0.1,
+                "is_directed_elsewhere": 0.95,
+                "has_reply_hook": 0.2,
+            },
+            2.8,
+            continuation=False,
+            addressed_to_bot=True,
+        )
+        self.assertTrue(act)
+        self.assertIn("value", reason)
+
     def test_continuation_can_act_with_lower_value(self) -> None:
         act, _ = decide_answers(
             {
