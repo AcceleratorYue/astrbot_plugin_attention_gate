@@ -7,7 +7,7 @@ desc: >-
   只有高置信、低风险、时机合适时，才通过 AstrBot 原生管线触发一次主动回复。
   支持 dry-run、单群每小时上限、120 秒冷却、冷却期消息缓冲、
   接话延续识别、模板列表形式的兴趣/话题/问题配置和强制引用目标消息。
-version: 0.3.0
+version: 0.4.0
 author: AcceleratorYue
 repo: https://github.com/AcceleratorYue/astrbot_plugin_attention_gate
 social_link: https://github.com/AcceleratorYue

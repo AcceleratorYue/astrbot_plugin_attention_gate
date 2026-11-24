@@ -155,6 +155,9 @@ GET  /health
 | 权重 | 0~100，越大越容易被判断为相关 |
 | 关键词 | 一行一个，可添加多个 |
 | 同义词/别名 | 每行 `本体=别名1,别名2`，例如 `鲸鱼=大肥鱼,小肥鱼` |
+| 参与主动触发 | 关闭后只作为正常聊天的人格背景，不进入主动回复判断 |
+
+像「解题与知识问答」这种兴趣，应关闭「参与主动触发」：它用于别人点名问 Bot 时正常回答，而不是一看到问题就凑上去答。
 
 所有群共用。
 
@@ -167,7 +170,7 @@ GET  /health
 | 群号 | 例如 `123456789` |
 | 显示名称 | 方便识别 |
 | 启用 | 关闭后该群不再使用话题层 |
-| 话题列表 | 每行格式：`方向|权重|关键词1,关键词2` |
+| 话题列表 | 每行格式：`方向|权重|关键词1,关键词2`；行尾加 `|被动` 表示只作为群聊背景，不参与主动触发 |
 
 示例：
 
@@ -175,9 +178,11 @@ GET  /health
 游戏与联机|85|游戏,十点半,Minecraft,MC,VRChat,战雷,开黑
 AI/插件/技术|75|模型,token,插件,提示词,部署,代码,桌宠
 B站与视频|70|B站,视频,UP,评论区,弹幕,切片
-玩梗与表情包|60|梗,表情包,图,斗嘴,吐槽,复读
-群友日常|45|今天,上班,下班,睡觉,好累,刚刚
+玩梗与表情包|60|梗,表情包,图,斗嘴,吐槽,复读|被动
+群友日常|45|今天,上班,下班,睡觉,好累,刚刚|被动
 ```
+
+只有稳定构成群聊信息底色的方向才设为主动；一次性爆发事件、签到、纯图片、日常碎片应设为 `|被动`，否则会反复触发。
 
 加一个新群时，只需在 `group_topic_schemes` 里新增一条方案，不会影响其他群。
 
@@ -275,6 +280,7 @@ is_impulse 过线
 | `is_mentioned` | 是否点名/直接对 Bot 说话 |
 | `is_directed_elsewhere` | 是否明确在跟另一个具体的人或另一个 Bot 说话 |
 | `has_reply_hook` | 是否有足够的信息/情绪/话题钩子，让旁人接话自然 |
+| `is_answer_seeking` | 是否在向群里寻求知识/答案/解题 |
 | `is_persona_fit` | 是否符合全局人格兴趣 |
 | `is_group_topic_fit` | 是否符合当前群话题 |
 | `is_good_moment` | 现在插话是否自然 |
@@ -297,6 +303,12 @@ is_impulse 过线
   单字、复读、口号、纯图片/表情、没有上下文的短句
   → 直接 pass
   ```
+- `is_answer_seeking` 高于 `answer_seeking_threshold`，且没有叫 Bot 名字：
+  ```text
+  在群里提问、求解、问题目
+  → 直接 pass
+  ```
+  这类兴趣只保留给“别人点名问 Bot”时的正常回答，不作为主动凑上去答题的理由。
 
 如果消息明确叫到 `bot_names` 里的名字，视为对当前 Bot 说话，不套用这两个硬门。
 
@@ -318,6 +330,7 @@ impulse_risk_max
 directed_elsewhere_threshold
 directed_elsewhere_hook_max
 reply_hook_threshold
+answer_seeking_threshold
 ```
 
 当前建议/默认：
@@ -327,6 +340,7 @@ reply_value_threshold         1.65
 reply_hook_threshold          0.60
 directed_elsewhere_threshold  0.65
 directed_elsewhere_hook_max   0.70
+answer_seeking_threshold      0.65
 ```
 
 ### 决定规则
@@ -344,6 +358,11 @@ is_good_moment 过低 → pass
 信息密度门：
   不是明确叫 Bot 名字
   且 has_reply_hook 低于 reply_hook_threshold
+  → pass
+
+答题门：
+  不是明确叫 Bot 名字
+  且 is_answer_seeking 高于 answer_seeking_threshold
   → pass
 
 冲动路径：
