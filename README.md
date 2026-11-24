@@ -315,7 +315,7 @@ is_impulse 过线
   半句话、补刀、对上一句的续写、孤立碎片
   → 直接 pass
   ```
-  收到消息后会先等 `active_reply_settle_seconds`（默认 4 秒），
+  收到消息后会先等 `active_reply_settle_seconds`（默认 10 秒），
   并把同一发送者连续的几句话作为“目标轮次”一起交给判断和生成。
 
 如果消息明确叫到 `bot_names` 里的名字，视为对当前 Bot 说话，不套用这两个硬门。
@@ -352,7 +352,7 @@ directed_elsewhere_threshold  0.65
 directed_elsewhere_hook_max   0.70
 answer_seeking_threshold      0.65
 complete_turn_threshold       0.55
-active_reply_settle_seconds   4.0
+active_reply_settle_seconds   10.0
 ```
 
 ### 决定规则

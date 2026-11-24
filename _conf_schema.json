@@ -673,7 +673,7 @@
   "active_reply_settle_seconds": {
     "description": "主动判断等待秒数",
     "type": "float",
-    "default": 4.0,
-    "hint": "收到消息后先等一小会，让同一轮连续发言进入缓冲区；0 表示不等待"
+    "default": 10.0,
+    "hint": "收到消息后先等一会儿，让同一轮连续发言进入缓冲区；不追求即时抢答"
   }
 }
