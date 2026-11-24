@@ -81,7 +81,8 @@
           "算法",
           "答案"
         ],
-        "aliases": ""
+        "aliases": "",
+        "proactive": false
       },
       {
         "__template_key": "interest",
@@ -96,7 +97,8 @@
           "好吃",
           "奶茶"
         ],
-        "aliases": ""
+        "aliases": "",
+        "proactive": true
       },
       {
         "__template_key": "interest",
@@ -111,7 +113,8 @@
           "摸鱼",
           "海"
         ],
-        "aliases": ""
+        "aliases": "",
+        "proactive": true
       },
       {
         "__template_key": "interest",
@@ -125,7 +128,8 @@
           "喜欢你",
           "抱抱"
         ],
-        "aliases": ""
+        "aliases": "",
+        "proactive": true
       },
       {
         "__template_key": "interest",
@@ -140,7 +144,8 @@
           "安慰",
           "开心"
         ],
-        "aliases": ""
+        "aliases": "",
+        "proactive": true
       }
     ],
     "hint": "所有群共享；每个方向单独开关、权重和词表",
@@ -178,6 +183,12 @@
             "type": "text",
             "default": "",
             "hint": "每行一个：本体=别名1,别名2,别名3"
+          },
+          "proactive": {
+            "description": "参与主动触发",
+            "type": "bool",
+            "default": true,
+            "hint": "关闭后只作为正常聊天的人格背景，不参与主动回复判断"
           }
         }
       }
@@ -247,7 +258,7 @@
         ]
       }
     ],
-    "hint": "每个群一个方案；未写方案的群不使用群话题层，只走人格兴趣层。",
+    "hint": "每个群一个方案；未写方案的群不使用群话题层，只走人格兴趣层。；行尾加 |被动 表示只作为群聊背景，不参与主动触发",
     "templates": {
       "group": {
         "name": "群话题方案",
@@ -496,6 +507,16 @@
       },
       {
         "__template_key": "question",
+        "id": "is_answer_seeking",
+        "enabled": true,
+        "type": "noul",
+        "instructions": "目标消息是否在向群里寻求知识、答案或解题，而不是自然闲聊或玩梗？",
+        "true_criteria": "提问、求解、问为什么/怎么/答案/题目，期待有人给出知识性回答",
+        "false_criteria": "感叹、吐槽、反问、自问自答、玩梗、闲聊，或问题只是对话的引子",
+        "score_levels": []
+      },
+      {
+        "__template_key": "question",
         "id": "is_persona_fit",
         "enabled": true,
         "type": "noul",
@@ -628,5 +649,11 @@
     "type": "float",
     "default": 0.7,
     "hint": "只有 directed_elsewhere 高且回复钩子低于该值时才直接 pass；钩子足够高仍允许判断"
+  },
+  "answer_seeking_threshold": {
+    "description": "答题/知识求助硬门阈值",
+    "type": "float",
+    "default": 0.65,
+    "hint": "非点名 Bot 的消息达到该值直接 pass，避免一有人提问就凑上去答题"
   }
 }

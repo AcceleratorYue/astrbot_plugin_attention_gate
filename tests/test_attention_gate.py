@@ -318,6 +318,41 @@ class DecideTests(unittest.TestCase):
         self.assertTrue(act)
         self.assertIn("value", reason)
 
+    def test_answer_seeking_passes(self) -> None:
+        act, reason = decide_answers(
+            {
+                "is_persona_fit": 0.9,
+                "is_group_topic_fit": 0.9,
+                "is_good_moment": 0.9,
+                "is_risky": 0.1,
+                "is_directed_elsewhere": 0.2,
+                "has_reply_hook": 0.9,
+                "is_answer_seeking": 0.9,
+            },
+            2.8,
+            continuation=False,
+        )
+        self.assertFalse(act)
+        self.assertIn("answer_seeking", reason)
+
+    def test_answer_seeking_ignored_when_named(self) -> None:
+        act, reason = decide_answers(
+            {
+                "is_persona_fit": 0.9,
+                "is_group_topic_fit": 0.9,
+                "is_good_moment": 0.9,
+                "is_risky": 0.1,
+                "is_directed_elsewhere": 0.2,
+                "has_reply_hook": 0.9,
+                "is_answer_seeking": 0.9,
+            },
+            2.8,
+            continuation=False,
+            addressed_to_bot=True,
+        )
+        self.assertTrue(act)
+        self.assertIn("value", reason)
+
     def test_continuation_can_act_with_lower_value(self) -> None:
         act, _ = decide_answers(
             {
@@ -435,6 +470,23 @@ class ParsingTests(unittest.TestCase):
         )
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]["aliases"]["鲸鱼"], ["大肥鱼", "小肥鱼"])
+
+    def test_passive_interest_flag(self) -> None:
+        result = normalize_interest_groups(
+            [
+                {"name": "解题", "enabled": True, "keywords": ["题"], "proactive": False},
+                {"name": "鲸鱼", "enabled": True, "keywords": ["鲸"]},
+            ]
+        )
+        self.assertFalse(result[0]["proactive"])
+        self.assertTrue(result[1]["proactive"])
+
+    def test_passive_topic_flag(self) -> None:
+        topics = parse_topic_lines(
+            ["游戏|85|MC,开黑", "群友日常|45|今天,上班|被动"]
+        )
+        self.assertTrue(topics[0]["proactive"])
+        self.assertFalse(topics[1]["proactive"])
 
     def test_group_topic_scheme_parsing(self) -> None:
         schemes = normalize_group_schemes(

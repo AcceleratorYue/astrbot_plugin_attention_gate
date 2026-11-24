@@ -36,7 +36,7 @@ from astrbot.api.message_components import At, Image, Plain, Reply
 from astrbot.api.star import Context, Star, StarTools
 
 PLUGIN_NAME = "astrbot_plugin_attention_gate"
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 LOG = f"[{PLUGIN_NAME}]"
 
 DEFAULT_JEV_URL = "https://tokenrhythm.studio/v1/decision"
@@ -202,6 +202,14 @@ DEFAULT_QUESTIONS: dict[str, Any] = {
             "false": "只有单字、复读、口号、纯图片/表情、无上下文短句，接话只能硬凑或追问",
         },
     },
+    "is_answer_seeking": {
+        "type": "noul",
+        "instructions": "目标消息是否在向群里寻求知识、答案或解题，而不是自然闲聊或玩梗？",
+        "criteria": {
+            "true": "提问、求解、问为什么/怎么/答案/题目，期待有人给出知识性回答",
+            "false": "感叹、吐槽、反问、自问自答、玩梗、闲聊，或问题只是对话的引子",
+        },
+    },
     "is_persona_fit": {
         "type": "noul",
         "instructions": "目标消息是否符合机器人的全局人格兴趣？",        "criteria": {
@@ -271,6 +279,7 @@ DEFAULT_THRESHOLDS = {
     "is_directed_elsewhere": 0.65,
     "directed_elsewhere_hook_max": 0.70,
     "has_reply_hook": 0.60,
+    "is_answer_seeking": 0.65,
     "reply_value": 1.65,
     "continuation_reply_value": 1.20,
     "is_impulse": 0.72,
@@ -332,6 +341,7 @@ def normalize_interests(value: Any) -> list[dict[str, Any]]:
                 "weight": _as_float(item.get("weight"), 50.0),
                 "keywords": keywords,
                 "aliases": aliases,
+                "proactive": item.get("proactive", True) is not False,
             }
         )
     return result
@@ -378,6 +388,7 @@ def normalize_interest_groups(value: Any) -> list[dict[str, Any]]:
                 "weight": _as_float(item.get("weight"), 50.0),
                 "keywords": _split_keywords(item.get("keywords")),
                 "aliases": aliases,
+                "proactive": item.get("proactive", True) is not False,
             }
         )
     return result
@@ -394,7 +405,7 @@ def parse_topic_lines(lines: Any) -> list[dict[str, Any]]:
         text = str(line).strip()
         if not text or text.startswith("#"):
             continue
-        parts = text.split("|", 2)
+        parts = text.split("|")
         if len(parts) < 2:
             continue
         name = parts[0].strip()
@@ -402,7 +413,17 @@ def parse_topic_lines(lines: Any) -> list[dict[str, Any]]:
             continue
         weight = _as_float(parts[1].strip(), 50.0)
         keywords = _split_keywords(parts[2] if len(parts) > 2 else "")
-        topics.append({"name": name, "weight": weight, "keywords": keywords, "aliases": {}})
+        mode = parts[3].strip().lower() if len(parts) > 3 else ""
+        proactive = mode not in {"被动", "passive", "false", "0", "否", "仅聊天"}
+        topics.append(
+            {
+                "name": name,
+                "weight": weight,
+                "keywords": keywords,
+                "aliases": {},
+                "proactive": proactive,
+            }
+        )
     return topics
 
 
@@ -505,6 +526,7 @@ def decide_answers(
     continuation_p = _as_float(nouls.get("is_continuation"), 0.0)
     impulse = _as_float(nouls.get("is_impulse"), 0.0)
     directed_elsewhere = _as_float(nouls.get("is_directed_elsewhere"), 0.0)
+    answer_seeking = _as_float(nouls.get("is_answer_seeking"), 0.0)
     # 问题被关闭/旧配置没有该问题时，hook 默认放行，避免误杀全部消息。
     reply_hook = _as_float(nouls.get("has_reply_hook"), 1.0)
     value = _as_float(score, 0.0)
@@ -525,6 +547,8 @@ def decide_answers(
             return False, f"directed_elsewhere({directed_elsewhere:.2f})"
         if reply_hook < th["has_reply_hook"]:
             return False, f"no_reply_hook({reply_hook:.2f})"
+        if answer_seeking >= th["is_answer_seeking"]:
+            return False, f"answer_seeking({answer_seeking:.2f})"
 
     # 第三层：突发回复欲望。不需要兴趣匹配，但风险要求更严。
     if (
@@ -650,6 +674,7 @@ class AttentionGatePlugin(Star):
             "directed_elsewhere_threshold": "is_directed_elsewhere",
             "directed_elsewhere_hook_max": "directed_elsewhere_hook_max",
             "reply_hook_threshold": "has_reply_hook",
+            "answer_seeking_threshold": "is_answer_seeking",
         }
         for field, key in scalar_keys.items():
             value = self._cfg(field, None)
@@ -668,10 +693,13 @@ class AttentionGatePlugin(Star):
     def _global_interests(self) -> list[dict[str, Any]]:
         groups = self._cfg("interest_groups", None)
         if isinstance(groups, list):
-            return normalize_interest_groups(groups)
-        return normalize_interests(
-            self._json_cfg("global_interests", DEFAULT_GLOBAL_INTERESTS)
-        )
+            items = normalize_interest_groups(groups)
+        else:
+            items = normalize_interests(
+                self._json_cfg("global_interests", DEFAULT_GLOBAL_INTERESTS)
+            )
+        # passive 兴趣只用于正常聊天的人格背景，不参与主动回复门控。
+        return [x for x in items if x.get("proactive", True)]
 
     def _group_profile(self, group_id: str) -> dict[str, Any]:
         schemes = self._cfg("group_topic_schemes", None)
@@ -686,7 +714,10 @@ class AttentionGatePlugin(Star):
         profile = profiles.get(group_id)
         if not isinstance(profile, dict):
             return {}
-        return {"topics": normalize_interests(profile.get("topics", []))}
+        topics = normalize_interests(profile.get("topics", []))
+        return {
+            "topics": [x for x in topics if x.get("proactive", True)]
+        }
 
     def _data_dir_path(self) -> Path:
         if self._data_dir is None:
