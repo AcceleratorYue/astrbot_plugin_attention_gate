@@ -36,7 +36,7 @@ from astrbot.api.message_components import At, Image, Plain, Reply
 from astrbot.api.star import Context, Star, StarTools
 
 PLUGIN_NAME = "astrbot_plugin_attention_gate"
-VERSION = "0.4.0"
+VERSION = "0.4.1"
 LOG = f"[{PLUGIN_NAME}]"
 
 DEFAULT_JEV_URL = "https://tokenrhythm.studio/v1/decision"
@@ -210,6 +210,14 @@ DEFAULT_QUESTIONS: dict[str, Any] = {
             "false": "感叹、吐槽、反问、自问自答、玩梗、闲聊，或问题只是对话的引子",
         },
     },
+    "is_complete_turn": {
+        "type": "noul",
+        "instructions": "目标消息是否构成一个完整、可独立回应的发言，而不是半句、补刀、续写或碎片？",
+        "criteria": {
+            "true": "有完整陈述、问题或明确情绪，能直接回应",
+            "false": "需要等后续消息才完整，或只是对上一句的续写、补刀、孤立短语",
+        },
+    },
     "is_persona_fit": {
         "type": "noul",
         "instructions": "目标消息是否符合机器人的全局人格兴趣？",        "criteria": {
@@ -280,6 +288,7 @@ DEFAULT_THRESHOLDS = {
     "directed_elsewhere_hook_max": 0.70,
     "has_reply_hook": 0.60,
     "is_answer_seeking": 0.65,
+    "is_complete_turn": 0.55,
     "reply_value": 1.65,
     "continuation_reply_value": 1.20,
     "is_impulse": 0.72,
@@ -527,6 +536,7 @@ def decide_answers(
     impulse = _as_float(nouls.get("is_impulse"), 0.0)
     directed_elsewhere = _as_float(nouls.get("is_directed_elsewhere"), 0.0)
     answer_seeking = _as_float(nouls.get("is_answer_seeking"), 0.0)
+    complete_turn = _as_float(nouls.get("is_complete_turn"), 1.0)
     # 问题被关闭/旧配置没有该问题时，hook 默认放行，避免误杀全部消息。
     reply_hook = _as_float(nouls.get("has_reply_hook"), 1.0)
     value = _as_float(score, 0.0)
@@ -549,6 +559,8 @@ def decide_answers(
             return False, f"no_reply_hook({reply_hook:.2f})"
         if answer_seeking >= th["is_answer_seeking"]:
             return False, f"answer_seeking({answer_seeking:.2f})"
+        if complete_turn < th["is_complete_turn"]:
+            return False, f"incomplete_turn({complete_turn:.2f})"
 
     # 第三层：突发回复欲望。不需要兴趣匹配，但风险要求更严。
     if (
@@ -675,6 +687,7 @@ class AttentionGatePlugin(Star):
             "directed_elsewhere_hook_max": "directed_elsewhere_hook_max",
             "reply_hook_threshold": "has_reply_hook",
             "answer_seeking_threshold": "is_answer_seeking",
+            "complete_turn_threshold": "is_complete_turn",
         }
         for field, key in scalar_keys.items():
             value = self._cfg(field, None)
@@ -752,6 +765,7 @@ class AttentionGatePlugin(Star):
                 "last_proactive_got_reply": False,
                 "awaiting_reply": False,
                 "created_at": time.time(),
+                "settle_token": 0,
             }
             self._states[group_id] = state
         return state
@@ -795,6 +809,37 @@ class AttentionGatePlugin(Star):
 
     def _append_buffer(self, group_id: str, record: dict[str, Any]) -> None:
         self._state(group_id)["buffer"].append(record)
+
+    def _target_turn(
+        self, state: dict[str, Any], target: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        """取目标消息所属的连续发言，避免只拿半句话做判断。"""
+        items = list(state["buffer"])
+        if not items:
+            return [target]
+        sender_id = str(target.get("sender_id") or "")
+        try:
+            end = next(
+                i
+                for i in range(len(items) - 1, -1, -1)
+                if str(items[i].get("message_id") or "")
+                == str(target.get("message_id") or "")
+            )
+        except StopIteration:
+            return [target]
+        turn: list[dict[str, Any]] = []
+        last_ts = _as_float(target.get("ts"), 0.0)
+        for item in reversed(items[: end + 1]):
+            if str(item.get("sender_id") or "") != sender_id:
+                break
+            ts = _as_float(item.get("ts"), 0.0)
+            if turn and last_ts and ts and last_ts - ts > 15:
+                break
+            turn.append(item)
+            last_ts = ts
+            if len(turn) >= 6:
+                break
+        return list(reversed(turn))
 
     def _trim_dispatches(self, state: dict[str, Any], now: float) -> None:
         dispatches = state["dispatches"]
@@ -911,6 +956,10 @@ class AttentionGatePlugin(Star):
                 "message_id": target.get("message_id", ""),
                 "sender": target.get("sender_name", ""),
                 "content": target.get("content", ""),
+                "turn": [
+                    {"time": item.get("time", ""), "content": item.get("content", "")}
+                    for item in self._target_turn(state, target)
+                ],
             },
             "continuation": "yes" if continuation else "no",
             "idle_state": {
@@ -1293,6 +1342,18 @@ class AttentionGatePlugin(Star):
             f"目标消息 ID：{target.get('message_id')}，发送者：{target.get('sender_name')}。\n"
             f"目标内容：{target.get('content')}\n"
         )
+        turn = target.get("turn") or []
+        if isinstance(turn, list) and len(turn) > 1:
+            prompt += "目标消息所属的连续发言：\n" + "\n".join(
+                f"- {item.get('time', '')} {item.get('content', '')}"
+                for item in turn
+                if isinstance(item, dict)
+            ) + "\n"
+        prompt += (
+            "先读懂这段对话在聊什么，再回应目标的完整意思；"
+            "不要只抓某个词做字面反应，也不要接半句或补刀。"
+            "如果上下文不足，调用 keep_silent。\n"
+        )
         if self._use_target_only_prompt():
             prompt += (
                 "群聊场景和最近对话由 Context Aware 负责注入；"
@@ -1352,6 +1413,16 @@ class AttentionGatePlugin(Star):
             return
 
         self._append_buffer(group_id, record)
+
+        # 等一小会儿，让同一轮连续发言先落进缓冲区，避免只拿半句话判断。
+        settle = _as_float(self._cfg("active_reply_settle_seconds", 0.0), 0.0)
+        if settle > 0:
+            token = _as_int(state.get("settle_token"), 0) + 1
+            state["settle_token"] = token
+            await asyncio.sleep(settle)
+            if _as_int(state.get("settle_token"), 0) != token:
+                return
+
         now = time.time()
         if self._in_cooldown(state, now):
             return

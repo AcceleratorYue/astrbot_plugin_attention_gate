@@ -281,6 +281,7 @@ is_impulse 过线
 | `is_directed_elsewhere` | 是否明确在跟另一个具体的人或另一个 Bot 说话 |
 | `has_reply_hook` | 是否有足够的信息/情绪/话题钩子，让旁人接话自然 |
 | `is_answer_seeking` | 是否在向群里寻求知识/答案/解题 |
+| `is_complete_turn` | 是否是完整发言，而不是半句/补刀/孤立碎片 |
 | `is_persona_fit` | 是否符合全局人格兴趣 |
 | `is_group_topic_fit` | 是否符合当前群话题 |
 | `is_good_moment` | 现在插话是否自然 |
@@ -309,6 +310,13 @@ is_impulse 过线
   → 直接 pass
   ```
   这类兴趣只保留给“别人点名问 Bot”时的正常回答，不作为主动凑上去答题的理由。
+- `is_complete_turn` 低于 `complete_turn_threshold`，且没有叫 Bot 名字：
+  ```text
+  半句话、补刀、对上一句的续写、孤立碎片
+  → 直接 pass
+  ```
+  收到消息后会先等 `active_reply_settle_seconds`（默认 4 秒），
+  并把同一发送者连续的几句话作为“目标轮次”一起交给判断和生成。
 
 如果消息明确叫到 `bot_names` 里的名字，视为对当前 Bot 说话，不套用这两个硬门。
 
@@ -331,6 +339,8 @@ directed_elsewhere_threshold
 directed_elsewhere_hook_max
 reply_hook_threshold
 answer_seeking_threshold
+complete_turn_threshold
+active_reply_settle_seconds
 ```
 
 当前建议/默认：
@@ -341,6 +351,8 @@ reply_hook_threshold          0.60
 directed_elsewhere_threshold  0.65
 directed_elsewhere_hook_max   0.70
 answer_seeking_threshold      0.65
+complete_turn_threshold       0.55
+active_reply_settle_seconds   4.0
 ```
 
 ### 决定规则
@@ -363,6 +375,11 @@ is_good_moment 过低 → pass
 答题门：
   不是明确叫 Bot 名字
   且 is_answer_seeking 高于 answer_seeking_threshold
+  → pass
+
+碎片门：
+  不是明确叫 Bot 名字
+  且 is_complete_turn 低于 complete_turn_threshold
   → pass
 
 冲动路径：
@@ -393,6 +410,27 @@ is_good_moment 过低 → pass
 ```
 
 这些信息只帮助判断，不会因为“时间到了”自动发消息。
+
+## 上下文轮次
+
+主动判断不是收到单条消息就立刻执行：
+
+```text
+消息进入缓冲区
+→ 等待 active_reply_settle_seconds
+→ 同一发送者连续发言合并成 target turn
+→ Jev 同时看到最近对话和目标轮次
+→ act 后生成 prompt 也带上目标轮次
+```
+
+生成时会明确要求：
+
+```text
+先读懂这段对话在聊什么，再回应目标的完整意思；
+不要只抓某个词做字面反应，也不要接半句或补刀。
+```
+
+因此它不会因为“肥鱼”“气人”这种单个词，就直接对一句半截话生成回复。
 
 ## 与上下文感知增强（Context Aware）联动
 

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.1 (2026-11-24)
+
+### 修复
+- 主动判断增加 `active_reply_settle_seconds`，先等同一轮连续发言进入缓冲区。
+- Jev 与生成 prompt 使用 `target turn`，同一发送者连续几句话一起判断。
+- 新增 `is_complete_turn` 与 `complete_turn_threshold`，半句、补刀、孤立碎片直接 pass。
+- 生成 prompt 明确要求先理解对话再回应完整意思，不要只抓单个词。
+
 ## 0.4.0 (2026-11-24)
 
 ### 新增

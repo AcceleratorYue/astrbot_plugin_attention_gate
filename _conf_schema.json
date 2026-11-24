@@ -515,6 +515,16 @@
       },
       {
         "__template_key": "question",
+        "id": "is_complete_turn",
+        "enabled": true,
+        "type": "noul",
+        "instructions": "目标消息是否构成一个完整、可独立回应的发言，而不是半句、补刀、续写或碎片？",
+        "true_criteria": "有完整陈述、问题或明确情绪，能直接回应",
+        "false_criteria": "需要等后续消息才完整，或只是对上一句的续写、补刀、孤立短语",
+        "score_levels": []
+      },
+      {
+        "__template_key": "question",
         "id": "is_persona_fit",
         "enabled": true,
         "type": "noul",
@@ -653,5 +663,17 @@
     "type": "float",
     "default": 0.65,
     "hint": "非点名 Bot 的消息达到该值直接 pass，避免一有人提问就凑上去答题"
+  },
+  "complete_turn_threshold": {
+    "description": "完整发言阈值",
+    "type": "float",
+    "default": 0.55,
+    "hint": "非点名消息低于该值时直接 pass，避免接半句话"
+  },
+  "active_reply_settle_seconds": {
+    "description": "主动判断等待秒数",
+    "type": "float",
+    "default": 4.0,
+    "hint": "收到消息后先等一小会，让同一轮连续发言进入缓冲区；0 表示不等待"
   }
 }
