@@ -301,6 +301,18 @@
     "type": "int",
     "default": 120
   },
+  "density_window_seconds": {
+    "description": "回复密度窗口（秒）",
+    "type": "int",
+    "default": 900,
+    "hint": "短窗口内最多主动回复几次；0 表示关闭密度限制"
+  },
+  "density_max_dispatches": {
+    "description": "窗口内最多主动回复次数",
+    "type": "int",
+    "default": 2,
+    "hint": "与 density_window_seconds 配合，防止短时间连续刷屏"
+  },
   "continuation_window_seconds": {
     "description": "接话延续窗口（秒）",
     "type": "int",
@@ -673,7 +685,37 @@
   "active_reply_settle_seconds": {
     "description": "主动判断等待秒数",
     "type": "float",
-    "default": 4.0,
-    "hint": "收到消息后先等一小会，让同一轮连续发言进入缓冲区；0 表示不等待"
+    "default": 10.0,
+    "hint": "收到消息后先等一会儿，让同一轮连续发言进入缓冲区；不追求即时抢答"
+  },
+  "active_reply_wait_max_messages": {
+    "description": "等待窗口最多收集消息数",
+    "type": "int",
+    "default": 20,
+    "hint": "等待期间最多把多少条同批消息带入判断"
+  },
+  "post_reply_penalty_seconds": {
+    "description": "回复后阈值惩罚窗口（秒）",
+    "type": "int",
+    "default": 600,
+    "hint": "刚主动回复过的一段时间内提高接话门槛，避免连续抢话"
+  },
+  "post_reply_threshold_penalty": {
+    "description": "回复后回复价值阈值增量",
+    "type": "float",
+    "default": 0.2,
+    "hint": "在上述窗口内 reply_value 需要额外达到的分数"
+  },
+  "user_attention_window_seconds": {
+    "description": "用户注意力窗口（秒）",
+    "type": "int",
+    "default": 1800,
+    "hint": "同一用户在此窗口内已经触发过主动回复时，提高其后续接话门槛"
+  },
+  "user_repeat_penalty": {
+    "description": "同一用户重复触发惩罚",
+    "type": "float",
+    "default": 0.15,
+    "hint": "窗口内每有一次该用户触发的主动回复，reply_value 阈值增加该值（封顶 0.4）"
   }
 }
