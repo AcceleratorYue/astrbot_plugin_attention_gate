@@ -43,9 +43,12 @@ AstrBot/data/plugins/astrbot_plugin_attention_gate
    - `jev_provider_url`：Jev 服务地址；
    - `model`：模型 ID；
    - `api_key`：TokenRhythm 平台必填 `sk_` Key；自托管无鉴权可留空；
+   - `jev_max_state_chars`：Jev 状态最大字符数，默认 12000；
    - `enabled_groups`：填写示例群号；实际按你的群替换；
    - `enabled_groups` 清空后表示**所有群聊生效**；填写时只在这些群生效；
    - `dry_run`：先保持 `true`。
+
+> Jev 状态过长时上游会返回 HTTP 422 `JEV_UPSTREAM_REJECTED`。插件会在发送前自动裁剪最近对话、未回复消息、批次和轮次，并受 `jev_max_state_chars` 总长度限制。
 
 ## 两种 Jev 服务接入方式
 
