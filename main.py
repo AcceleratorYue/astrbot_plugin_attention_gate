@@ -36,7 +36,7 @@ from astrbot.api.message_components import At, Image, Plain, Reply
 from astrbot.api.star import Context, Star, StarTools
 
 PLUGIN_NAME = "astrbot_plugin_attention_gate"
-VERSION = "0.5.0"
+VERSION = "0.5.1"
 LOG = f"[{PLUGIN_NAME}]"
 
 DEFAULT_JEV_URL = "https://tokenrhythm.studio/v1/decision"
@@ -939,6 +939,37 @@ class AttentionGatePlugin(Star):
     # Jev
     # ------------------------------------------------------------------
 
+    def _fit_jev_state(self, state: dict[str, Any]) -> dict[str, Any]:
+        """限制 Jev 输入体积，避免上游因上下文过长返回 422。"""
+        max_chars = _as_int(
+            self._cfg("jev_max_state_chars", 12000), 12000, 2000
+        )
+        target = state.get("target_message") or {}
+
+        def size() -> int:
+            return len(json.dumps(state, ensure_ascii=False))
+
+        while size() > max_chars and target.get("wait_batch"):
+            target["wait_batch"].pop(0)
+        while size() > max_chars and target.get("turn") and len(target["turn"]) > 1:
+            target["turn"].pop(0)
+        while size() > max_chars and state.get("recent_unanswered"):
+            state["recent_unanswered"].pop(0)
+        while size() > max_chars and state.get("recent_conversation"):
+            state["recent_conversation"].pop(0)
+        if size() > max_chars:
+            # 最后手段：截短所有可见文本，保留结构和目标。
+            for line in state.get("recent_conversation", []):
+                state["recent_conversation"][
+                    state["recent_conversation"].index(line)
+                ] = str(line)[:160]
+            for item in state.get("recent_unanswered", []):
+                if isinstance(item, dict):
+                    item["content"] = str(item.get("content") or "")[:120]
+            if isinstance(target.get("content"), str):
+                target["content"] = target["content"][:300]
+        return state
+
     def _build_state(
         self,
         event: AstrMessageEvent,
@@ -956,13 +987,13 @@ class AttentionGatePlugin(Star):
             elif item.get("is_bot"):
                 name = f"{name}(机器人)"
             lines.append(
-                f"[#{item.get('message_id')}] {item.get('time')} {name}: {item.get('content')}"
+                f"[#{item.get('message_id')}] {item.get('time')} {name}: {str(item.get('content') or '')[:300]}"
             )
         continuation = self._continuation(state, str(event.get_sender_id() or ""))
         now = time.time()
         last_proactive = _as_float(state.get("last_proactive_at"), 0.0)
         since_last = now - (last_proactive or _as_float(state.get("created_at"), now))
-        return {
+        state_view = {
             "bot_persona": self._persona(),
             "global_interest_profile": profile_text(self._global_interests()),
             "group_id": group_id,
@@ -974,23 +1005,26 @@ class AttentionGatePlugin(Star):
                 {
                     "time": item.get("time", ""),
                     "sender": item.get("sender_name", ""),
-                    "content": item.get("content", ""),
+                    "content": str(item.get("content") or "")[:200],
                 }
-                for item in list(state.get("unanswered", ()))[-10:]
+                for item in list(state.get("unanswered", ()))[-6:]
             ],
-            "last_bot_reply": str(state.get("last_bot_reply") or "")[:500],
+            "last_bot_reply": str(state.get("last_bot_reply") or "")[:300],
             "target_message": {
                 "message_id": target.get("message_id", ""),
                 "sender": target.get("sender_name", ""),
-                "content": target.get("content", ""),
+                "content": str(target.get("content") or "")[:500],
                 "turn": [
-                    {"time": item.get("time", ""), "content": item.get("content", "")}
+                    {
+                        "time": item.get("time", ""),
+                        "content": str(item.get("content") or "")[:300],
+                    }
                     for item in self._target_turn(state, target)
                 ],
                 "wait_batch": [
                     {
                         "sender": item.get("sender_name", ""),
-                        "content": item.get("content", ""),
+                        "content": str(item.get("content") or "")[:200],
                     }
                     for item in (target.get("batch") or [])
                     if isinstance(item, dict)
@@ -1007,6 +1041,7 @@ class AttentionGatePlugin(Star):
                 ),
             },
         }
+        return self._fit_jev_state(state_view)
 
     def _questions(self, self_id: str, group_id: str = "") -> dict[str, Any]:
         schemes = self._cfg("judge_questions", None)

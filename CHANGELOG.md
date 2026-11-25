@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.1 (2026-11-25)
+
+### 修复
+- 修复 Jev 422 `JEV_UPSTREAM_REJECTED`：限制 Jev state 字符数（默认 12000），自动裁剪最近对话、未回复消息、批次和轮次。
+- 单条状态内容在进入 Jev 前截断，避免长上下文把状态推到上游输入上限。
+- 新增 `jev_max_state_chars` 配置。
+
 ## 0.5.0 (2026-11-24)
 
 ### 借鉴 group_chat_plus 的优化

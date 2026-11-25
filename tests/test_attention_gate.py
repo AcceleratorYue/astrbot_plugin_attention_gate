@@ -908,6 +908,22 @@ class StateTests(unittest.TestCase):
             self.plugin._thresholds_for_state(state, "u2")["reply_value"], 1.8
         )
 
+    def test_jev_state_is_bounded(self) -> None:
+        self.plugin.config = FakeConfig({"jev_max_state_chars": 2200})
+        state = {
+            "recent_conversation": [f"消息{i} " + "长" * 200 for i in range(20)],
+            "recent_unanswered": [{"content": "长" * 200} for _ in range(6)],
+            "target_message": {
+                "content": "长" * 500,
+                "turn": [{"content": "长" * 300} for _ in range(6)],
+                "wait_batch": [{"content": "长" * 200} for _ in range(20)],
+            },
+        }
+        result = self.plugin._fit_jev_state(state)
+        self.assertLessEqual(
+            len(__import__("json").dumps(result, ensure_ascii=False)), 2200
+        )
+
     def test_target_turn_groups_same_sender(self) -> None:
         state = self.plugin._state("g")
         state["buffer"].extend(

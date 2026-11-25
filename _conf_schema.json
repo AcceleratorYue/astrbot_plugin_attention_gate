@@ -717,5 +717,11 @@
     "type": "float",
     "default": 0.15,
     "hint": "窗口内每有一次该用户触发的主动回复，reply_value 阈值增加该值（封顶 0.4）"
+  },
+  "jev_max_state_chars": {
+    "description": "Jev 状态最大字符数",
+    "type": "int",
+    "default": 12000,
+    "hint": "超过后自动裁剪最近对话/未回复/批次，避免上游 422 输入过长"
   }
 }
