@@ -723,5 +723,57 @@
     "type": "int",
     "default": 12000,
     "hint": "超过后自动裁剪最近对话/未回复/批次，避免上游 422 输入过长"
+  },
+  "send_gate_enable": {
+    "description": "启用统一消息发送门控观察层",
+    "type": "bool",
+    "default": false,
+    "hint": "当前只实现 dry-run；开启后仅记录，不改变真实发送"
+  },
+  "send_gate_dry_run": {
+    "description": "发送门控 dry-run",
+    "type": "bool",
+    "default": true,
+    "hint": "只记录 would_root/would_merge/would_release，不延迟、不停止、不改写请求"
+  },
+  "send_gate_enabled_groups": {
+    "description": "发送门控观察群",
+    "type": "list",
+    "default": [],
+    "hint": "空列表表示全部群聊",
+    "items": {
+      "type": "string"
+    }
+  },
+  "send_gate_observe_private": {
+    "description": "观察私聊请求",
+    "type": "bool",
+    "default": true
+  },
+  "send_gate_max_window_seconds": {
+    "description": "dry-run 窗口长度（秒）",
+    "type": "int",
+    "default": 30
+  },
+  "send_gate_cleanup_seconds": {
+    "description": "lane 清理时间（秒）",
+    "type": "int",
+    "default": 180
+  },
+  "send_gate_min_wait_seconds": {
+    "description": "dry-run 模拟最短等待（秒）",
+    "type": "int",
+    "default": 2
+  },
+  "send_gate_max_wait_seconds": {
+    "description": "dry-run 模拟最长等待（秒）",
+    "type": "int",
+    "default": 10
+  },
+  "send_gate_log_content": {
+    "description": "日志记录消息前缀",
+    "type": "bool",
+    "default": false,
+    "hint": "仅 dry-run 调试用，打开后记录前 80 字"
   }
 }

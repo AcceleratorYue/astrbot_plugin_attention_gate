@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.0 (2026-11-26)
+
+### 统一消息发送门控：dry-run 观察层
+- 新增 `send_gate/` 模块和 `on_waiting_llm_request` / `on_llm_request` 观察 Hook。
+- 当前只做 dry-run：不 stop、不 sleep、不改写 ProviderRequest。
+- 记录 `would_root` / `would_merge` / `would_release` 到 `send_gate_dryrun_YYYYMMDD.jsonl`。
+- 支持按群过滤、私聊开关、窗口长度、模拟等待和 lane 清理。
+- 旧 `astrbot_plugin_debounce` 仍保留，不参与新观察层。
+
 ## 0.5.1 (2026-11-25)
 
 ### 修复

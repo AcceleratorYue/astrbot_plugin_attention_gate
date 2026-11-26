@@ -33,10 +33,16 @@ from typing import Any
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.message_components import At, Image, Plain, Reply
+from astrbot.api.provider import ProviderRequest
 from astrbot.api.star import Context, Star, StarTools
 
+try:  # 包内加载
+    from .send_gate import SendGateObserver
+except ImportError:  # 兼容测试直接 import main 的场景
+    from send_gate import SendGateObserver
+
 PLUGIN_NAME = "astrbot_plugin_attention_gate"
-VERSION = "0.5.1"
+VERSION = "0.6.0"
 LOG = f"[{PLUGIN_NAME}]"
 
 DEFAULT_JEV_URL = "https://tokenrhythm.studio/v1/decision"
@@ -608,6 +614,11 @@ class AttentionGatePlugin(Star):
         self.config = config or {}
         self._data_dir: Path | None = None
         self._states: dict[str, dict[str, Any]] = {}
+        self._send_gate = SendGateObserver(
+            config=self.config,
+            data_dir_getter=self._data_dir_path,
+            logger=logger,
+        )
         self._msg_embedding_cache: OrderedDict[str, list[float]] = OrderedDict()
         self._profile_embedding_cache: dict[str, tuple[str, list[list[float]]]] = {}
         logger.info(
@@ -1751,6 +1762,21 @@ class AttentionGatePlugin(Star):
             or state.get("last_dispatch_sender")
             or ""
         )
+
+    # ------------------------------------------------------------------
+    # 统一消息发送门控：dry-run 观察层
+    # ------------------------------------------------------------------
+    # 只观察，不 stop、不 sleep、不改 req。真实发送门控实现前放在最高
+    # 优先级，确保能先于旧 debounce/其他 hook 看到请求。
+    @filter.on_waiting_llm_request(priority=900000)
+    async def on_send_gate_waiting(self, event: AstrMessageEvent) -> None:
+        await self._send_gate.observe_waiting(event)
+
+    @filter.on_llm_request(priority=900000)
+    async def on_send_gate_llm_request(
+        self, event: AstrMessageEvent, req: ProviderRequest
+    ) -> None:
+        await self._send_gate.observe_llm(event, req)
 
     @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE, priority=-2)
     async def on_group_message_entry(

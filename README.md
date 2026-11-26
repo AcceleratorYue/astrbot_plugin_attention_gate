@@ -504,6 +504,49 @@ Jev 和生成 prompt 会看到“等待窗口内同批到达的消息”，不�
 
 避免 Bot 一直盯着同一个用户接话。明确叫到 Bot 名字的消息不受该惩罚影响。
 
+## 统一消息发送门控 dry-run
+
+v0.6.0 开始加入 `send_gate` 观察层，但目前**只做 dry-run**：
+
+```text
+不 stop_event
+不 sleep
+不修改 ProviderRequest
+不创建新请求
+```
+
+它会在 `on_waiting_llm_request` / `on_llm_request` 记录：
+
+```text
+would_root
+would_merge
+would_release
+```
+
+日志：
+
+```text
+data/plugin_data/astrbot_plugin_attention_gate/send_gate_dryrun_YYYYMMDD.jsonl
+```
+
+配置：
+
+```json
+{
+  "send_gate_enable": true,
+  "send_gate_dry_run": true,
+  "send_gate_enabled_groups": [],
+  "send_gate_observe_private": true,
+  "send_gate_max_window_seconds": 30,
+  "send_gate_cleanup_seconds": 180,
+  "send_gate_min_wait_seconds": 2,
+  "send_gate_max_wait_seconds": 10,
+  "send_gate_log_content": false
+}
+```
+
+旧 `astrbot_plugin_debounce` 暂不停止，仍负责真实等待；新观察层只收集数据。
+
 ## 与上下文感知增强（Context Aware）联动
 
 主动回复触发时会设置结构化标记：
