@@ -135,6 +135,23 @@ class HookRegistrationTests(unittest.TestCase):
         self.assertIn("on_send_gate_llm_request", llm_names)
 
 
+class SchemaOrderTests(unittest.TestCase):
+    def test_schema_starts_with_grouped_sections(self):
+        import json
+
+        schema = json.loads(
+            (Path(__file__).resolve().parents[1] / "_conf_schema.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(len(schema), 65)
+        self.assertTrue(schema["enable"]["description"].startswith("【基础】"))
+        self.assertTrue(schema["api_key"]["description"].startswith("【Jev】"))
+        self.assertTrue(
+            schema["send_gate_enable"]["description"].startswith("【发送门控】")
+        )
+
+
 class DryRunObserverTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
