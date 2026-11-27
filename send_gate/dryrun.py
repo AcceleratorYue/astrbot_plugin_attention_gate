@@ -502,6 +502,10 @@ class SendGateObserver:
                     onnx_score=lane.onnx_score,
                     jev_score=lane.jev_score,
                 )
+                try:
+                    event.set_extra("send_gate_released", True)
+                except Exception:
+                    pass
                 self._lanes.pop(key, None)
                 return
 

@@ -44,7 +44,7 @@ except ImportError:  # 兼容测试直接 import main 的场景
     from send_gate.onnx_rhythm import OnnxRhythm
 
 PLUGIN_NAME = "astrbot_plugin_attention_gate"
-VERSION = "0.9.0"
+VERSION = "0.9.1"
 LOG = f"[{PLUGIN_NAME}]"
 
 DEFAULT_JEV_URL = "https://tokenrhythm.studio/v1/decision"
@@ -2078,6 +2078,37 @@ class AttentionGatePlugin(Star):
         self, event: AstrMessageEvent, req: ProviderRequest
     ) -> None:
         await self._send_gate.observe_llm(event, req)
+
+    @filter.on_llm_request(priority=-2000000)
+    async def on_send_gate_handoff(
+        self, event: AstrMessageEvent, req: ProviderRequest
+    ) -> None:
+        """最后一道 on_llm_request：记录是否真正交给模型。"""
+        if not self._bool("send_gate_enforce", False):
+            return
+        if not event.get_extra("send_gate_released", False):
+            return
+        logger.info(
+            "%s send_gate handoff | stopped=%s | prompt_chars=%s | image_count=%s",
+            LOG,
+            event.is_stopped(),
+            len(str(getattr(req, "prompt", "") or "")),
+            len(getattr(req, "image_urls", None) or ()),
+        )
+
+    @filter.on_llm_response(priority=-2000000)
+    async def on_send_gate_response(
+        self, event: AstrMessageEvent, resp: Any
+    ) -> None:
+        if not event.get_extra("send_gate_released", False):
+            return
+        text = str(getattr(resp, "completion_text", "") or "")
+        logger.info(
+            "%s send_gate model response | text_chars=%s | empty=%s",
+            LOG,
+            len(text),
+            not bool(text.strip()),
+        )
 
     @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE, priority=-2)
     async def on_group_message_entry(

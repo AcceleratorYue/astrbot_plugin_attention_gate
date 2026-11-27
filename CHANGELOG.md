@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.1 (2026-11-27)
+
+### 诊断
+- 发送门控释放后记录 send_gate handoff；若后续插件 stop，可据此定位。
+- 模型返回后记录 send_gate model response 与空回复状态。
+
 ## 0.9.0 (2026-11-27)
 
 ### 共享决策窗口
