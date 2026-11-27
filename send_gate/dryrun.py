@@ -26,6 +26,7 @@ from typing import Any, Callable
 from .request_kind import (
     CHAT,
     CHAT_PRIVATE,
+    FOLLOWUP,
     PROACTIVE,
     USER_FACING_KINDS,
     RequestInfo,
@@ -206,9 +207,28 @@ class SendGateObserver:
                 and now - lane.first_at <= window
             )
             if enforce:
+                if active and lane is not None and info.kind in (
+                    PROACTIVE,
+                    FOLLOWUP,
+                ):
+                    # 同一发送者的主动/跟进候选如果是在已有 root 窗口内产生的，
+                    # 说明它已经被群消息缓冲合并，不能再作为第二个请求发出。
+                    try:
+                        event.stop_event()
+                    except Exception:
+                        pass
+                    self._record(
+                        stage="waiting",
+                        action="duplicate_nonmergeable_stop",
+                        info=info,
+                        window_count=lane.count,
+                        window_age_ms=max(0, int((now - lane.first_at) * 1000)),
+                        would_wait_ms=0,
+                        enforce=True,
+                    )
+                    return
                 if active and lane is not None and info.kind not in COMPLETENESS_KINDS:
-                    # poke/proactive/follow-up 不混入普通聊天窗口，也不 stop；
-                    # 让它作为独立请求等待 session lock。
+                    # poke 不混入普通聊天窗口，也不 stop；让它作为独立请求排队。
                     self._record(
                         stage="waiting",
                         action="bypass_nonmergeable",

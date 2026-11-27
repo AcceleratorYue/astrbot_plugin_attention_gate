@@ -429,6 +429,28 @@ class DryRunObserverTests(unittest.TestCase):
         run(observer.observe_llm(event, req=SimpleNamespace(prompt="x", image_urls=[])))
         self.assertTrue(event.stopped)
 
+    def test_duplicate_proactive_in_active_lane_is_stopped(self):
+        self.config.values.update(
+            {
+                "send_gate_enforce": True,
+                "send_gate_dry_run": False,
+                "send_gate_min_wait_seconds": 0,
+                "send_gate_max_window_seconds": 10,
+            }
+        )
+        root = FakeEvent(text="root", msg_id="r1", group="50005")
+        dup = FakeEvent(
+            text="follow-up",
+            msg_id="r2",
+            group="50005",
+            extras={"active_reply_triggered": {"x": 1}},
+        )
+        run(self.observer.observe_waiting(root))
+        run(self.observer.observe_waiting(dup))
+        self.assertTrue(dup.stopped)
+        actions = [r["action"] for r in self._records()]
+        self.assertIn("duplicate_nonmergeable_stop", actions)
+
     def test_release_closes_lane(self):
         first = FakeEvent(text="第一句", msg_id="m1")
         second = FakeEvent(text="释放后的新消息", msg_id="m2")
