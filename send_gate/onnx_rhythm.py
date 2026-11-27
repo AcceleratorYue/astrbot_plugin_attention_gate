@@ -8,7 +8,8 @@
 - normal: advent259141/astrbot_debouncer_normal
 
 本模块直接使用标准库下载公开模型文件，不依赖其它 AstrBot 插件的目录，
-也不需要安装 modelscope 包。
+也不需要安装 modelscope 包。下载校验读取 ModelScope 当前文件元数据中的
+大小与 SHA256，不把模型版本写死在插件里。
 """
 
 from __future__ import annotations
@@ -43,54 +44,6 @@ MODELSCOPE_PATHS = {
     "tokenizer/tokenizer_config.json": "tokenizer/tokenizer_config.json",
     "tokenizer/special_tokens_map.json": "tokenizer/special_tokens_map.json",
     "tokenizer/vocab.txt": "tokenizer/vocab.txt",
-}
-# 本地相对路径 -> (字节数, SHA256)。用于发现 CDN 截断、旧版残留和
-# 上游文件被替换；固定的是当前 ModelScope 仓库 master 的 LFS 对象。
-EXPECTED_FILES: dict[str, dict[str, tuple[int, str]]] = {
-    "normal": {
-        "model.onnx": (
-            154_004_327,
-            "0e7b4c63cc01b84d1fdf09f7483969678ca2aa227d26fc82245fee7a4d6e6e7b",
-        ),
-        "tokenizer/tokenizer.json": (
-            439_387,
-            "c9c9a74e179a68973f69f4d9dc6245c3563b350dffa313f29b875ce9619e99c9",
-        ),
-        "tokenizer/tokenizer_config.json": (
-            1_219,
-            "56cf9402c068e2d7e848cd0568c117052229a7c92e6ae4808e4aa892219f0067",
-        ),
-        "tokenizer/special_tokens_map.json": (
-            695,
-            "5d5b662e421ea9fac075174bb0688ee0d9431699900b90662acd44b2a350503a",
-        ),
-        "tokenizer/vocab.txt": (
-            109_540,
-            "45bbac6b341c319adc98a532532882e91a9cefc0329aa57bac9ae761c27b291c",
-        ),
-    },
-    "small": {
-        "model.onnx": (
-            12_801_841,
-            "07b3b3fcfa3bed4f06cdf6acb0a0e31c1c5cc479c0347a40ed6856eca44347f9",
-        ),
-        "tokenizer/tokenizer.json": (
-            439_387,
-            "c9c9a74e179a68973f69f4d9dc6245c3563b350dffa313f29b875ce9619e99c9",
-        ),
-        "tokenizer/tokenizer_config.json": (
-            1_270,
-            "ae57eda34a3d4e3bbab5edd30c5b7e4ee3c493fa48c2e1af1443b6bd619afc19",
-        ),
-        "tokenizer/special_tokens_map.json": (
-            125,
-            "b6d346be366a7d1d48332dbc9fdf3bf8960b5d879522b7799ddba59e76237ee3",
-        ),
-        "tokenizer/vocab.txt": (
-            109_540,
-            "45bbac6b341c319adc98a532532882e91a9cefc0329aa57bac9ae761c27b291c",
-        ),
-    },
 }
 MIN_FILE_BYTES = {
     "model.onnx": 1_000_000,
@@ -236,29 +189,101 @@ class OnnxRhythm:
             self._logger.info("[send_gate] ONNX 节奏模型已加载: %s", path)
             return self._classifier
 
-    def _expected_files(self) -> dict[str, tuple[int, str]]:
-        if self._custom_model_path() is not None:
-            return {}
-        return EXPECTED_FILES.get(self._model_type(), {})
+    def _remote_file_meta(self, url: str, timeout: float = 30.0) -> tuple[int, str]:
+        """读取上游当前文件元数据，不把模型版本写死在插件里。
+
+        ModelScope/CDN 对 Range 请求返回 Content-Range 总大小，并在
+        X-Linked-Etag / x-oss-hash-value 中给出 LFS 对象的 SHA256。
+        """
+        # 大文件 Range 响应带 X-Linked-Etag，小文件可能只在 HEAD 响应
+        # 带 ETag。分别取大小与 SHA256，避免依赖某个 CDN 路径的返回细节。
+        head_request = urllib.request.Request(
+            url,
+            method="HEAD",
+            headers={
+                "User-Agent": self._user_agent,
+                "Accept": "application/octet-stream",
+            },
+        )
+        digest = ""
+        try:
+            with urllib.request.urlopen(head_request, timeout=timeout) as response:
+                digest = (
+                    (
+                        response.headers.get("X-Linked-Etag")
+                        or response.headers.get("x-oss-hash-value")
+                        or ""
+                    )
+                    .strip()
+                    .lower()
+                )
+        except (urllib.error.HTTPError, urllib.error.URLError):
+            pass
+        range_request = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": self._user_agent,
+                "Accept": "application/octet-stream",
+                "Range": "bytes=0-0",
+            },
+        )
+        total = 0
+        with urllib.request.urlopen(range_request, timeout=timeout) as response:
+            range_digest = (
+                (
+                    response.headers.get("X-Linked-Etag")
+                    or response.headers.get("x-oss-hash-value")
+                    or ""
+                )
+                .strip()
+                .lower()
+            )
+            digest = digest or range_digest
+            content_range = response.headers.get("Content-Range", "")
+            if "/" in content_range:
+                try:
+                    total = int(content_range.rsplit("/", 1)[1])
+                except ValueError:
+                    total = 0
+            if total <= 0:
+                length = response.headers.get("Content-Length", "")
+                if str(length).isdigit():
+                    total = int(length)
+        if len(digest) != 64 or total <= 0:
+            raise RuntimeError(f"上游未返回可用的文件大小/SHA256: {url}")
+        return total, digest
 
     def _model_valid(self, path: Path | None = None) -> bool:
         root = path or self._model_path()
         if not self._model_complete(root):
             return False
-        expected = self._expected_files()
-        if not expected:
+        if self._custom_model_path() is not None:
             return True
-        return all(
-            self._file_matches(root / relative, size, digest)
-            for relative, (size, digest) in expected.items()
+        model_type = self._model_type()
+        repo = MODELSCOPE_REPOS[model_type]
+        timeout = max(
+            10.0,
+            float(self._cfg("send_gate_onnx_download_timeout_seconds", 120) or 120),
         )
+        try:
+            for relative in REQUIRED_FILES:
+                url = MODELSCOPE_FILE_URL.format(
+                    repo=repo, path=MODELSCOPE_PATHS[relative]
+                )
+                size, digest = self._remote_file_meta(url, timeout)
+                if not self._file_matches(root / relative, size, digest):
+                    return False
+        except (urllib.error.URLError, TimeoutError, OSError, RuntimeError) as exc:
+            # 离线部署仍应能加载本地模型；网络恢复后再校验。
+            self._logger.debug(
+                "[send_gate] 无法读取上游 ONNX 校验信息，暂按本地文件加载: %s", exc
+            )
+            return True
+        return True
 
     def _download_all(self, target: Path) -> None:
         model_type = self._model_type()
         repo = MODELSCOPE_REPOS[model_type]
-        expected = self._expected_files()
-        if not expected:
-            raise RuntimeError("当前模型类型没有可用的下载校验表")
         timeout = max(
             10.0,
             float(self._cfg("send_gate_onnx_download_timeout_seconds", 120) or 120),
@@ -271,12 +296,13 @@ class OnnxRhythm:
         )
         for relative in REQUIRED_FILES:
             destination = target / relative
-            size, digest = expected[relative]
+            url = MODELSCOPE_FILE_URL.format(repo=repo, path=MODELSCOPE_PATHS[relative])
+            # 每次下载都以当前上游元数据为准；上游更新后不需要跟版改代码。
+            size, digest = self._remote_file_meta(url, timeout)
             if self._file_matches(destination, size, digest):
                 continue
             if self._cancel_requested:
                 raise asyncio.CancelledError
-            url = MODELSCOPE_FILE_URL.format(repo=repo, path=MODELSCOPE_PATHS[relative])
             destination.parent.mkdir(parents=True, exist_ok=True)
             fd, part_name = tempfile.mkstemp(
                 prefix=f".{destination.name}.",
@@ -297,7 +323,8 @@ class OnnxRhythm:
                     header = response.headers.get("Content-Length")
                     if header and str(header).isdigit() and int(header) != size:
                         raise RuntimeError(
-                            f"下载大小与上游清单不一致: {relative} ({header} != {size})"
+                            f"下载大小与上游元数据不一致: {relative}"
+                            f" ({header} != {size})"
                         )
                     written = 0
                     with part.open("wb") as handle:
@@ -309,7 +336,7 @@ class OnnxRhythm:
                                 break
                             written += len(chunk)
                             if written > size:
-                                raise RuntimeError(f"下载文件超过预期大小: {relative}")
+                                raise RuntimeError(f"下载文件超过上游大小: {relative}")
                             handle.write(chunk)
                 if written != size:
                     raise RuntimeError(

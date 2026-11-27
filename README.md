@@ -185,7 +185,7 @@ data/plugin_data/astrbot_plugin_attention_gate/models/normal
 - Small（约 12MB）：<https://modelscope.cn/models/advent259141/astrbot_debouncer_small>
 - Normal（约 154MB）：<https://modelscope.cn/models/advent259141/astrbot_debouncer_normal>
 
-启用 `send_gate_onnx_enable` 后，如果默认目录缺少文件，插件会在后台从 ModelScope 下载，下载完成后校验文件大小与 SHA256 并自动加载；损坏文件会被重新下载。首次下载期间发送门控使用纯时间窗口，不会阻塞回复。
+启用 `send_gate_onnx_enable` 后，如果默认目录缺少文件，插件会在后台从 ModelScope 下载，下载完成后读取 ModelScope 当前文件元数据中的大小与 SHA256 进行校验并自动加载；损坏文件会被重新下载。上游更新文件后无需跟版升级插件。首次下载期间发送门控使用纯时间窗口，不会阻塞回复。
 
 首次下载失败后约 10 分钟会在下一次真实发送窗口重试；期间使用纯时间窗口。离线部署时，从 ModelScope 仓库下载文件后，把上游的 `model/model.onnx` 放到本地的 `models/<small|normal>/model.onnx`，tokenizer 文件放到本地同名 `tokenizer/` 目录：
 

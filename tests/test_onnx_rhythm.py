@@ -13,10 +13,9 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from send_gate import onnx_rhythm  # noqa: E402
 from send_gate.onnx_rhythm import (  # noqa: E402
-    EXPECTED_FILES,
     MIN_FILE_BYTES,
+    MODELSCOPE_FILE_URL,
     MODELSCOPE_PATHS,
     MODELSCOPE_REPOS,
     REQUIRED_FILES,
@@ -44,9 +43,9 @@ class FakeConfig:
 
 
 class FakeResponse(io.BytesIO):
-    def __init__(self, data: bytes) -> None:
+    def __init__(self, data: bytes = b"", headers: dict | None = None) -> None:
         super().__init__(data)
-        self.headers = {"Content-Length": str(len(data))}
+        self.headers = headers or {"Content-Length": str(len(data))}
 
     def __enter__(self):
         return self
@@ -72,9 +71,31 @@ class OnnxSourceTests(unittest.TestCase):
             data_dir_getter=lambda: self.data_dir,
             logger=FakeLogger(),
         )
+        self.payloads: dict[str, bytes] = {}
+        self.digests: dict[str, str] = {}
+        for relative in REQUIRED_FILES:
+            size = max(MIN_FILE_BYTES[relative], 1)
+            seed = relative.encode("utf-8") + b"-"
+            repeats = (size + len(seed) - 1) // len(seed)
+            self.payloads[relative] = (seed * repeats)[:size]
+            self.digests[relative] = hashlib.sha256(self.payloads[relative]).hexdigest()
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
+
+    def _fake_urlopen(self, request, timeout=0):
+        url = request.full_url
+        remote = url.split("/resolve/master/", 1)[1]
+        local = next(key for key, value in MODELSCOPE_PATHS.items() if value == remote)
+        data = self.payloads[local]
+        if request.get_header("Range"):
+            return FakeResponse(
+                headers={
+                    "Content-Range": f"bytes 0-0/{len(data)}",
+                    "X-Linked-Etag": self.digests[local],
+                }
+            )
+        return FakeResponse(data)
 
     def test_model_path_never_falls_back_to_other_plugin(self) -> None:
         legacy = Path(self.tmp.name) / "astrbot_plugin_debounce" / "models" / "normal"
@@ -89,80 +110,47 @@ class OnnxSourceTests(unittest.TestCase):
         self.config.values["send_gate_onnx_model_path"] = str(custom)
         self.assertEqual(self.rhythm._model_path(), custom)
 
-    def test_download_uses_modelscope_files(self) -> None:
+    def test_download_uses_modelscope_files_and_upstream_checksum(self) -> None:
         target = self.data_dir / "models" / "normal"
         seen_urls: list[str] = []
-        payloads: dict[str, bytes] = {}
-        expected: dict[str, tuple[int, str]] = {}
-        for relative in REQUIRED_FILES:
-            size = max(MIN_FILE_BYTES[relative], 1)
-            payloads[relative] = b"x" * size
-            expected[relative] = (
-                size,
-                hashlib.sha256(payloads[relative]).hexdigest(),
-            )
 
         def fake_urlopen(request, timeout=0):
-            url = request.full_url
-            seen_urls.append(url)
-            remote = url.split("/resolve/master/", 1)[1]
-            local = next(
-                key for key, value in MODELSCOPE_PATHS.items() if value == remote
-            )
-            return FakeResponse(payloads[local])
+            seen_urls.append(request.full_url)
+            return self._fake_urlopen(request, timeout)
 
-        with (
-            patch("urllib.request.urlopen", fake_urlopen),
-            patch.dict(onnx_rhythm.EXPECTED_FILES, {"normal": expected}),
-        ):
+        with patch("urllib.request.urlopen", fake_urlopen):
             self.rhythm._download_all(target)
 
         self.assertIn(MODELSCOPE_REPOS["normal"], seen_urls[0])
-        self.assertIn("/model/model.onnx", seen_urls[0])
+        self.assertIn("/model/model.onnx", " ".join(seen_urls))
         self.assertNotIn("/master/model.onnx", " ".join(seen_urls))
         for relative in REQUIRED_FILES:
             self.assertTrue((target / relative).is_file(), relative)
+            self.assertEqual((target / relative).read_bytes(), self.payloads[relative])
         self.assertTrue(self.rhythm._model_complete(target))
 
     def test_hash_mismatch_redownloads_existing_file(self) -> None:
         target = self.data_dir / "models" / "normal"
-        payloads: dict[str, bytes] = {}
-        expected: dict[str, tuple[int, str]] = {}
         for relative in REQUIRED_FILES:
-            size = max(MIN_FILE_BYTES[relative], 1)
-            payloads[relative] = b"x" * size
-            expected[relative] = (
-                size,
-                hashlib.sha256(payloads[relative]).hexdigest(),
-            )
             bad = target / relative
             bad.parent.mkdir(parents=True, exist_ok=True)
-            bad.write_bytes(b"y" * size)
+            bad.write_bytes(b"y" * len(self.payloads[relative]))
 
-        def fake_urlopen(request, timeout=0):
-            remote = request.full_url.split("/resolve/master/", 1)[1]
-            local = next(
-                key for key, value in MODELSCOPE_PATHS.items() if value == remote
-            )
-            return FakeResponse(payloads[local])
-
-        with (
-            patch("urllib.request.urlopen", fake_urlopen),
-            patch.dict(onnx_rhythm.EXPECTED_FILES, {"normal": expected}),
-        ):
+        with patch("urllib.request.urlopen", self._fake_urlopen):
             self.rhythm._download_all(target)
             self.assertTrue(self.rhythm._model_valid(target))
             self.assertEqual(
-                (target / "model.onnx").read_bytes(), payloads["model.onnx"]
+                (target / "model.onnx").read_bytes(), self.payloads["model.onnx"]
             )
 
-    def test_expected_table_matches_known_normal_model(self) -> None:
-        size, digest = EXPECTED_FILES["normal"]["model.onnx"]
-        self.assertEqual(size, 154_004_327)
-        self.assertEqual(
-            digest,
-            "0e7b4c63cc01b84d1fdf09f7483969678ca2aa227d26fc82245fee7a4d6e6e7b",
+    def test_remote_metadata_is_read_from_headers(self) -> None:
+        url = MODELSCOPE_FILE_URL.format(
+            repo=MODELSCOPE_REPOS["normal"], path="model/model.onnx"
         )
+        with patch("urllib.request.urlopen", self._fake_urlopen):
+            size, digest = self.rhythm._remote_file_meta(url)
+        self.assertEqual(size, len(self.payloads["model.onnx"]))
+        self.assertEqual(digest, self.digests["model.onnx"])
 
     def test_incomplete_default_path_is_not_ready(self) -> None:
         self.assertFalse(self.rhythm._model_complete())

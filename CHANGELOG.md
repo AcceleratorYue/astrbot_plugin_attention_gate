@@ -26,7 +26,8 @@
 - 新增 `send_gate_onnx_auto_download` 与 `send_gate_onnx_download_timeout_seconds`。
 - 删除 `astrbot_plugin_debounce` 目录回退；插件不再读取其它插件的数据目录。
 - 模型缺失时后台下载/加载，期间降级为纯时间窗口；README 补充来源、文件清单和离线部署方式。
-- 下载按上游文件清单校验大小与 SHA256，支持损坏文件自动重下；临时文件唯一化并支持插件重载取消。
+- 下载校验读取 ModelScope 当前文件元数据中的大小与 SHA256，不写死上游版本；支持损坏文件自动重下。
+- 临时文件唯一化并支持插件重载取消。
 - `api_key` 标记为 `secret`；README 补充借鉴来源、模型许可、预筛与日志数据说明。
 
 ### 规范化
