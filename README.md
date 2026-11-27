@@ -89,8 +89,14 @@
 AstrBot/data/plugins/astrbot_plugin_attention_gate
 ```
 
-2. 重载插件。
-3. 打开插件配置，按板块填写：
+2. 重载插件。AstrBot 会自动读取插件根目录的 `requirements.txt`，为当前运行环境安装 ONNX 相关依赖。
+3. 确认 ONNX 模型位于：
+
+```text
+data/plugin_data/astrbot_plugin_attention_gate/models/normal
+```
+
+4. 打开插件配置，按板块填写：
 
 ```text
 【基础】启用、dry-run、群白名单、Bot 称呼、其它 Bot
@@ -372,5 +378,5 @@ python -m unittest discover -s tests -v
 版本：
 
 ```text
-v0.9.2
+v0.9.3
 ```

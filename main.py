@@ -44,7 +44,7 @@ except ImportError:  # 兼容测试直接 import main 的场景
     from send_gate.onnx_rhythm import OnnxRhythm
 
 PLUGIN_NAME = "astrbot_plugin_attention_gate"
-VERSION = "0.9.2"
+VERSION = "0.9.3"
 LOG = f"[{PLUGIN_NAME}]"
 
 DEFAULT_JEV_URL = "https://tokenrhythm.studio/v1/decision"

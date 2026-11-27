@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.3 (2026-11-28)
+安装依赖自动化，并整理发布配置。
+
+### 安装
+- 新增 `requirements.txt`，AstrBot 安装/加载插件时自动安装 ONNX 运行依赖。
+- 依赖包含 `onnxruntime`、`transformers`、`numpy`。
+- README 补充自动安装说明和模型目录位置。
+
 ## 0.9.2 (2026-11-27)
 
 ### 修复重复回复
