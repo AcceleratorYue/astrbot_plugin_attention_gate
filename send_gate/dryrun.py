@@ -1,10 +1,11 @@
-"""发送门控：dry-run 观察 + 可选真实窗口。
+"""统一消息发送门控。
 
 dry_run=true：
 - 只记录，不 stop、不 sleep、不改 req。
 
 send_gate_enforce=true：
-- 仅对普通聊天/私聊启用（当前阶段）
+- 普通聊天/私聊/主动回复/poke/follow-up 进入真实窗口
+- 群聊普通后续消息由群消息事件缓冲，不要求它自己产生 LLM 请求
 - root 在 on_llm_request 中等待安静窗口
 - follower 在 on_waiting_llm_request 中被 stop
 - root 合并 follower 文本/图片后释放原请求
@@ -25,9 +26,7 @@ from typing import Any, Callable
 from .request_kind import (
     CHAT,
     CHAT_PRIVATE,
-    INTERNAL,
     PROACTIVE,
-    UNKNOWN,
     USER_FACING_KINDS,
     RequestInfo,
     classify_request,
@@ -62,7 +61,7 @@ class _Lane:
     onnx_score: float | None = None
     jev_score: float | None = None
     jev_checked: bool = False
-    last_llm_at: float = 0.0
+    root_seen_llm: bool = False
 
 
 class SendGateObserver:
@@ -154,6 +153,9 @@ class SendGateObserver:
     def _enforce_for(self, event: Any, info: RequestInfo) -> bool:
         if not self._base_enabled() or not self._enforce_enabled():
             return False
+        # dry-run 优先级高于 enforce：只观察，绝不 stop/延迟。
+        if self._dryrun_enabled():
+            return False
         if info.kind not in ENFORCE_KINDS:
             return False
         if info.is_private and not self._bool(
@@ -202,6 +204,19 @@ class SendGateObserver:
                 and now - lane.first_at <= window
             )
             if enforce:
+                if active and lane is not None and info.kind not in COMPLETENESS_KINDS:
+                    # poke/proactive/follow-up 不混入普通聊天窗口，也不 stop；
+                    # 让它作为独立请求等待 session lock。
+                    self._record(
+                        stage="waiting",
+                        action="bypass_nonmergeable",
+                        info=info,
+                        window_count=lane.count,
+                        window_age_ms=max(0, int((now - lane.first_at) * 1000)),
+                        would_wait_ms=0,
+                        enforce=True,
+                    )
+                    return
                 if active and lane is not None:
                     lane.last_kind = info.kind
                     self._append_follower(
@@ -289,7 +304,9 @@ class SendGateObserver:
         buffer；root 建立窗口时再取走 root 之后的补充消息。
         """
         try:
-            if not self._base_enabled() or not self._enforce_enabled():
+            if not self._base_enabled():
+                return
+            if not self._enforce_enabled() and not self._dryrun_enabled():
                 return
             info = classify_request(event)
             if info.is_private or info.kind not in USER_FACING_KINDS:
@@ -311,7 +328,7 @@ class SendGateObserver:
             )
             recent = self._recent.get(key)
             if recent is None:
-                recent = deque(maxlen=12)
+                recent = deque(maxlen=50)
                 self._recent[key] = recent
             recent.append(item)
             lane = self._lanes.get(key)
@@ -371,6 +388,7 @@ class SendGateObserver:
                     )
                     return
 
+                lane.root_seen_llm = True
                 waited_ms = await self._wait_for_window(lane)
                 if (
                     lane.root_kind == PROACTIVE
@@ -379,13 +397,39 @@ class SendGateObserver:
                     and self._bool("send_gate_revalidate_proactive", True)
                 ):
                     keep = None
-                    try:
-                        keep = await self._revalidate_getter(
-                            lane.root_text, self._lane_text(lane)
+                    remaining = max(0.0, self._deadline(lane) - time.time())
+                    if remaining > 0:
+                        try:
+                            keep = await asyncio.wait_for(
+                                self._revalidate_getter(
+                                    lane.root_text, self._lane_text(lane)
+                                ),
+                                timeout=remaining,
+                            )
+                        except Exception:
+                            keep = None
+                    policy = str(
+                        self._cfg(
+                            "send_gate_revalidate_failure_policy",
+                            "keep_with_guard",
                         )
-                    except Exception:
-                        keep = None
-                    if keep is False:
+                        or "keep_with_guard"
+                    )
+                    if keep is None and policy == "retry_once_then_drop":
+                        remaining = max(0.0, self._deadline(lane) - time.time())
+                        if remaining > 0:
+                            try:
+                                keep = await asyncio.wait_for(
+                                    self._revalidate_getter(
+                                        lane.root_text, self._lane_text(lane)
+                                    ),
+                                    timeout=remaining,
+                                )
+                            except Exception:
+                                keep = None
+                        if keep is None:
+                            policy = "drop"
+                    if keep is False or (keep is None and policy == "drop"):
                         try:
                             event.stop_event()
                         except Exception:
@@ -404,7 +448,10 @@ class SendGateObserver:
                         )
                         self._lanes.pop(key, None)
                         return
-                merged = await self._merge_into_request(req, lane)
+                    guard = keep is None and policy == "keep_with_guard"
+                else:
+                    guard = False
+                merged = await self._merge_into_request(req, lane, guard=guard)
                 self._record(
                     stage="llm",
                     action="real_release",
@@ -430,10 +477,9 @@ class SendGateObserver:
             window_age_ms = (
                 max(0, int((now - lane.first_at) * 1000)) if lane else 0
             )
-            min_wait = self._int("send_gate_min_wait_seconds", 2, 0)
+            min_wait = self._int("send_gate_min_wait_seconds", 5, 0)
             max_wait = self._int("send_gate_max_wait_seconds", 10, 0)
             if lane is not None:
-                lane.last_llm_at = now
                 quiet_for = now - lane.last_at
                 would_wait = max(0.0, min_wait - quiet_for)
                 would_wait = min(float(max_wait), would_wait)
@@ -458,25 +504,38 @@ class SendGateObserver:
     # 执行辅助
     # ------------------------------------------------------------------
 
-    async def _wait_for_window(self, lane: _Lane) -> int:
-        min_wait = self._int("send_gate_min_wait_seconds", 2, 0)
+    def _deadline(self, lane: _Lane) -> float:
+        max_wait = self._int("send_gate_max_wait_seconds", 20, 0)
         max_window = self._int("send_gate_max_window_seconds", 20, 1)
-        low_wait = self._int("send_gate_onnx_low_wait_seconds", 3, 0)
+        deadline = lane.first_at + max_window
+        if max_wait > 0:
+            deadline = min(deadline, lane.first_at + max_wait)
+        return deadline
+
+    async def _wait_for_window(self, lane: _Lane) -> int:
+        min_wait = self._int("send_gate_min_wait_seconds", 5, 0)
+        low_wait = self._int("send_gate_onnx_low_wait_seconds", 6, 0)
+        deadline = self._deadline(lane)
         started = time.time()
         extended = False
         while True:
             now = time.time()
-            release_at = min(
-                lane.last_at + min_wait,
-                lane.first_at + max_window,
-            )
+            if now >= deadline:
+                break
+            release_at = min(lane.last_at + min_wait, deadline)
             if now < release_at:
                 await asyncio.sleep(min(0.05, max(0.01, release_at - now)))
                 continue
 
             if not extended and self._onnx is not None:
                 text = self._lane_text(lane)
-                score = await self._onnx.score(text)
+                remaining = max(0.01, deadline - time.time())
+                try:
+                    score = await asyncio.wait_for(
+                        self._onnx.score(text), timeout=remaining
+                    )
+                except Exception:
+                    score = None
                 if score is not None:
                     lane.onnx_score = score
                     low_threshold = float(
@@ -485,8 +544,7 @@ class SendGateObserver:
                     if score < low_threshold and low_wait > 0:
                         extended = True
                         extra_until = min(
-                            lane.last_at + low_wait,
-                            lane.first_at + max_window,
+                            lane.last_at + max(min_wait, low_wait), deadline
                         )
                         if extra_until > time.time():
                             await asyncio.sleep(
@@ -497,13 +555,16 @@ class SendGateObserver:
             if (
                 not lane.jev_checked
                 and self._completeness_getter is not None
-                and lane.last_kind in (CHAT, CHAT_PRIVATE)
+                and lane.root_kind in (CHAT, CHAT_PRIVATE)
                 and self._bool("send_gate_jev_enable", False)
             ):
                 lane.jev_checked = True
                 text = self._lane_text(lane)
+                remaining = max(0.01, deadline - time.time())
                 try:
-                    jev_value = await self._completeness_getter(text)
+                    jev_value = await asyncio.wait_for(
+                        self._completeness_getter(text), timeout=remaining
+                    )
                 except Exception:
                     jev_value = None
                 if jev_value is not None:
@@ -515,7 +576,7 @@ class SendGateObserver:
                         extra_wait = self._int(
                             "send_gate_jev_incomplete_wait_seconds", 2, 0
                         )
-                        remaining = lane.first_at + max_window - time.time()
+                        remaining = deadline - time.time()
                         if remaining > 0 and extra_wait > 0:
                             await asyncio.sleep(min(float(extra_wait), remaining))
                             continue
@@ -530,7 +591,9 @@ class SendGateObserver:
                 parts.append(text)
         return "\n".join(x for x in parts if x)[:3000]
 
-    async def _merge_into_request(self, req: Any, lane: _Lane) -> int:
+    async def _merge_into_request(
+        self, req: Any, lane: _Lane, *, guard: bool = False
+    ) -> int:
         if not lane.messages:
             return 0
         lines: list[str] = []
@@ -546,7 +609,7 @@ class SendGateObserver:
                 "请合并理解，不要逐条重复回答]\n"
                 + "\n".join(lines)
             )
-            if lane.root_kind == PROACTIVE:
+            if guard and lane.root_kind == PROACTIVE:
                 block += (
                     "\n[发送门控提醒] 如果新消息已经明显偏离原主动目标，"
                     "或无法确认该接哪句话，请调用 keep_silent，不要强行回复。"
@@ -590,6 +653,33 @@ class SendGateObserver:
             return result
         except Exception:
             return []
+
+    def drop_buffered_message(self, session_id: str, message_id: str) -> bool:
+        """兼容 recall_cancel：从 lane/recent 中移除被撤回的消息。"""
+        needle = str(session_id or "")
+        target = str(message_id or "")
+        if not needle or not target:
+            return False
+        removed = False
+        for key, lane in list(self._lanes.items()):
+            if needle not in key:
+                continue
+            kept = [item for item in lane.messages if item.message_id != target]
+            if len(kept) != len(lane.messages):
+                removed = True
+                lane.messages = kept
+                lane.count = max(1, len(kept) + 1)
+                lane.last_at = max(
+                    [lane.first_at] + [item.ts for item in kept]
+                )
+        for key, items in list(self._recent.items()):
+            if needle not in key:
+                continue
+            kept = [item for item in items if item.message_id != target]
+            if len(kept) != len(items):
+                removed = True
+                self._recent[key] = deque(kept, maxlen=50)
+        return removed
 
     def _append_follower(self, lane: _Lane, item: _Buffered) -> bool:
         if item.message_id and any(
@@ -637,6 +727,15 @@ class SendGateObserver:
             for key, lane in self._lanes.items()
             if now - lane.last_at > cleanup
         ]
+        max_window = self._int("send_gate_max_window_seconds", 20, 1)
+        abandoned = [
+            key
+            for key, lane in self._lanes.items()
+            if not lane.root_seen_llm
+            and now - lane.first_at > max_window
+        ]
+        for key in abandoned:
+            self._lanes.pop(key, None)
         for key in expired:
             self._lanes.pop(key, None)
             self._recent.pop(key, None)

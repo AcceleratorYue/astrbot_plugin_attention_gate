@@ -1,7 +1,4 @@
-"""面向用户的请求分类。
-
-dry-run 阶段只做观察，分类结果用于统计，不参与真实放行。
-"""
+"""面向用户的请求分类。"""
 
 from __future__ import annotations
 
@@ -14,7 +11,6 @@ FOLLOWUP = "followup"
 CHAT = "chat"
 CHAT_PRIVATE = "chat_private"
 INTERNAL = "internal"
-UNKNOWN = "unknown"
 
 USER_FACING_KINDS = {PROACTIVE, POKE, FOLLOWUP, CHAT, CHAT_PRIVATE}
 

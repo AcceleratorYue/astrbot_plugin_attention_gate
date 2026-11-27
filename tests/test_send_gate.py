@@ -134,8 +134,13 @@ class HookRegistrationTests(unittest.TestCase):
         )
         waiting_names = {h.handler_name for h in waiting}
         llm_names = {h.handler_name for h in llm}
+        adapter = star_handlers_registry.get_handlers_by_event_type(
+            EventType.AdapterMessageEvent
+        )
+        adapter_names = {h.handler_name for h in adapter}
         self.assertIn("on_send_gate_waiting", waiting_names)
         self.assertIn("on_send_gate_llm_request", llm_names)
+        self.assertIn("on_send_gate_group_message", adapter_names)
 
 
 class SchemaOrderTests(unittest.TestCase):
@@ -147,11 +152,30 @@ class SchemaOrderTests(unittest.TestCase):
                 encoding="utf-8"
             )
         )
-        self.assertEqual(len(schema), 77)
+        self.assertEqual(len(schema), 78)
         self.assertTrue(schema["enable"]["description"].startswith("【基础】"))
         self.assertTrue(schema["api_key"]["description"].startswith("【Jev】"))
         self.assertTrue(
             schema["send_gate_enable"]["description"].startswith("【发送门控】")
+        )
+
+
+class JevStateLimitTests(unittest.TestCase):
+    def test_fit_jev_state_hard_limit(self):
+        plugin = object.__new__(plugin_main.AttentionGatePlugin)
+        plugin.config = FakeConfig({"jev_max_state_chars": 2000})
+        state = {
+            "recent_conversation": ["长" * 2000 for _ in range(20)],
+            "recent_unanswered": [{"content": "长" * 2000} for _ in range(10)],
+            "target_message": {
+                "content": "长" * 2000,
+                "turn": [{"content": "长" * 2000} for _ in range(6)],
+                "wait_batch": [{"content": "长" * 2000} for _ in range(10)],
+            },
+        }
+        result = plugin._fit_jev_state(state)
+        self.assertLessEqual(
+            len(__import__("json").dumps(result, ensure_ascii=False)), 2000
         )
 
 
@@ -220,6 +244,7 @@ class DryRunObserverTests(unittest.TestCase):
         self.config.values.update(
             {
                 "send_gate_enforce": True,
+                "send_gate_dry_run": False,
                 "send_gate_enforce_groups": [],
                 "send_gate_enforce_private": False,
                 "send_gate_min_wait_seconds": 0,
@@ -252,6 +277,7 @@ class DryRunObserverTests(unittest.TestCase):
                     "send_gate_enable": True,
                     "send_gate_dry_run": True,
                     "send_gate_enforce": True,
+                "send_gate_dry_run": False,
                     "send_gate_enforce_groups": [],
                     "send_gate_enforce_private": False,
                     "send_gate_min_wait_seconds": 0,
@@ -280,6 +306,7 @@ class DryRunObserverTests(unittest.TestCase):
                     "send_gate_enable": True,
                     "send_gate_dry_run": True,
                     "send_gate_enforce": True,
+                "send_gate_dry_run": False,
                     "send_gate_enforce_groups": [],
                     "send_gate_enforce_private": False,
                     "send_gate_min_wait_seconds": 0,
@@ -308,6 +335,7 @@ class DryRunObserverTests(unittest.TestCase):
         self.config.values.update(
             {
                 "send_gate_enforce": True,
+                "send_gate_dry_run": False,
                 "send_gate_enforce_groups": [],
                 "send_gate_min_wait_seconds": 0,
                 "send_gate_max_window_seconds": 1,
@@ -322,6 +350,18 @@ class DryRunObserverTests(unittest.TestCase):
         run(self.observer.observe_llm(root, req))
         self.assertIn("后续一句", req.prompt)
         self.assertFalse(follow.stopped)
+
+    def test_drop_buffered_message(self):
+        self.config.values.update(
+            {"send_gate_enforce": True,
+                "send_gate_dry_run": False, "send_gate_enforce_groups": []}
+        )
+        root = FakeEvent(text="第一句", msg_id="d1", group="40004")
+        follow = FakeEvent(text="撤回这句", msg_id="d2", group="40004")
+        run(self.observer.observe_group_message(root, accept=lambda e: True))
+        run(self.observer.observe_group_message(follow, accept=lambda e: True))
+        self.assertTrue(self.observer.drop_buffered_message("40004", "d2"))
+        self.assertFalse(self.observer.drop_buffered_message("40004", "missing"))
 
     def test_release_closes_lane(self):
         first = FakeEvent(text="第一句", msg_id="m1")

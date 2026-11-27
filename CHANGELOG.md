@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.8.5 (2026-11-27)
+
+### 审计修复
+- 修复 Jev 重试时把错误响应体当成下一次请求体的问题。
+- dry-run 优先级高于 enforce：dry-run 开启时绝不 stop/延迟。
+- max_window/max_wait 作为硬 deadline，ONNX/Jev/revalidate 调用受剩余时间约束。
+- 群消息缓冲接受范围改用 send_gate 自身群范围，并扩大 recent 容量。
+- poke/proactive 不被普通聊天窗口当 follower 吞掉。
+- 增加 root 未进入 on_llm 的 lane 超时清理。
+- 修复 _fit_jev_state 截短不彻底导致超限。
+- 增加 revalidate_failure_policy 配置与 drop/keep/guard/retry 分支。
+
+## 0.8.4 (2026-11-27)
+
+### 审计整理
+- 配置项重排并修正发送门控字段的描述、默认值与 hint。
+- `send_gate_max_wait_seconds` 作为真实窗口总等待上限使用（与 max_window 取更小值）。
+- 新增 recall_cancel 兼容桥接：可从新的 recent/lane 中移除被撤回消息。
+- 清理未使用 import、常量与过期的 dry-run 文档描述。
+
 ## 0.8.3 (2026-11-27)
 
 ### 修复群聊后续消息未进入发送窗口

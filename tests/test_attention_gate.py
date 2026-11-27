@@ -119,6 +119,7 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
                 "quote_target_enabled": True,
                 "cooldown_seconds": 120,
                 "hourly_limit": 15,
+                "active_reply_settle_seconds": 0,
             }
         )
         plugin.context = FakeContext()

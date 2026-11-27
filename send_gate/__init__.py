@@ -1,7 +1,4 @@
-"""统一消息发送门控的 dry-run 观察层。
-
-当前阶段只观察，不延迟、不停止、不修改任何真实请求。
-"""
+"""统一消息发送门控：窗口、合并、ONNX 节奏与 Jev 完整性。"""
 
 from .dryrun import SendGateObserver
 from .request_kind import RequestInfo, classify_request

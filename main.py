@@ -44,7 +44,7 @@ except ImportError:  # 兼容测试直接 import main 的场景
     from send_gate.onnx_rhythm import OnnxRhythm
 
 PLUGIN_NAME = "astrbot_plugin_attention_gate"
-VERSION = "0.8.3"
+VERSION = "0.8.5"
 LOG = f"[{PLUGIN_NAME}]"
 
 DEFAULT_JEV_URL = "https://tokenrhythm.studio/v1/decision"
@@ -979,16 +979,40 @@ class AttentionGatePlugin(Star):
         while size() > max_chars and state.get("recent_conversation"):
             state["recent_conversation"].pop(0)
         if size() > max_chars:
-            # 最后手段：截短所有可见文本，保留结构和目标。
-            for line in state.get("recent_conversation", []):
-                state["recent_conversation"][
-                    state["recent_conversation"].index(line)
-                ] = str(line)[:160]
+            # 最后手段：按结构逐级截短，并在每轮后重新计算体积。
+            conversation = state.get("recent_conversation") or []
+            state["recent_conversation"] = [
+                str(line)[:160] for line in conversation
+            ]
             for item in state.get("recent_unanswered", []):
                 if isinstance(item, dict):
                     item["content"] = str(item.get("content") or "")[:120]
             if isinstance(target.get("content"), str):
                 target["content"] = target["content"][:300]
+            if isinstance(target.get("turn"), list):
+                target["turn"] = target["turn"][-2:]
+                for item in target["turn"]:
+                    if isinstance(item, dict):
+                        item["content"] = str(item.get("content") or "")[:300]
+            if isinstance(target.get("wait_batch"), list):
+                target["wait_batch"] = target["wait_batch"][-2:]
+                for item in target["wait_batch"]:
+                    if isinstance(item, dict):
+                        item["content"] = str(item.get("content") or "")[:200]
+        # 极端情况下继续丢弃较早上下文，保证不会无限超限。
+        for _ in range(64):
+            if size() <= max_chars:
+                break
+            if state.get("recent_conversation"):
+                state["recent_conversation"].pop(0)
+            elif state.get("recent_unanswered"):
+                state["recent_unanswered"].pop(0)
+            elif target.get("wait_batch"):
+                target["wait_batch"].pop(0)
+            elif target.get("turn") and len(target["turn"]) > 1:
+                target["turn"].pop(0)
+            else:
+                break
         return state
 
     def _build_state(
@@ -1119,13 +1143,13 @@ class AttentionGatePlugin(Star):
                 with urllib.request.urlopen(request, timeout=30) as response:
                     return json.loads(response.read().decode("utf-8"))
             except urllib.error.HTTPError as exc:
-                body = ""
+                error_body = ""
                 try:
-                    body = exc.read().decode("utf-8", "replace")[:300]
+                    error_body = exc.read().decode("utf-8", "replace")[:300]
                 except Exception:
                     pass
                 last_error = RuntimeError(
-                    f"HTTP {exc.code}: {body or exc.reason}"
+                    f"HTTP {exc.code}: {error_body or exc.reason}"
                 )
                 # 平台文档：429 容量限流，502/503/504 上游或依赖故障可重试；
                 # 401/403/413/422 等参数/权限错误不重试。
@@ -1560,7 +1584,7 @@ class AttentionGatePlugin(Star):
         self._append_buffer(group_id, record)
 
         # 等一小会儿，让同一轮连续发言先落进缓冲区，避免只拿半句话判断。
-        settle = _as_float(self._cfg("active_reply_settle_seconds", 0.0), 0.0)
+        settle = _as_float(self._cfg("active_reply_settle_seconds", 10.0), 10.0)
         if settle > 0:
             token = _as_int(state.get("settle_token"), 0) + 1
             state["settle_token"] = token
@@ -1856,8 +1880,15 @@ class AttentionGatePlugin(Star):
             logger.debug("%s send_gate 主动回复 revalidate 失败: %s", LOG, exc)
         return None
 
+    def drop_buffered_message(self, session_id: str, message_id: str) -> bool:
+        """供 recall_cancel 等插件移除发送门控缓冲中的已撤回消息。"""
+        try:
+            return self._send_gate.drop_buffered_message(session_id, message_id)
+        except Exception:
+            return False
+
     def _send_gate_accept_group(self, event: AstrMessageEvent) -> bool:
-        if event.is_private_chat():
+        if event.is_private_chat() or event.is_stopped():
             return False
         group_id = str(event.get_group_id() or "")
         if not group_id or not self._group_allowed(group_id):
@@ -1868,6 +1899,14 @@ class AttentionGatePlugin(Star):
             return False
         other_bots = {str(x) for x in (self._cfg("other_bot_ids", []) or [])}
         if sender_id in other_bots:
+            return False
+        dryrun = self._bool("send_gate_dry_run", True)
+        key = "send_gate_enabled_groups" if dryrun else "send_gate_enforce_groups"
+        groups = self._cfg(key, [])
+        if not isinstance(groups, list):
+            groups = [groups]
+        groups = {str(x).strip() for x in groups if str(x).strip()}
+        if groups and group_id not in groups:
             return False
         return True
 

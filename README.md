@@ -58,7 +58,7 @@
 
 ### 统一发送门控
 
-- **普通聊天、私聊、主动回复、poke、follow-up 统一进入窗口。**
+- **普通聊天、私聊、主动回复、poke 进入真实窗口；群聊普通跟进由消息事件缓冲合并。**
 - **同一用户连发合并**：follower 被 stop，root 合并文本和图片。
 - **只释放原请求**：不创建新的 `request_llm`，不重复调用主模型。
 - **ONNX 句尾节奏**：低分时延长等待，高分只做短静默。
@@ -132,7 +132,7 @@ AstrBot/data/plugins/astrbot_plugin_attention_gate
   "send_gate_dry_run": false,
 
   "send_gate_min_wait_seconds": 5,
-  "send_gate_max_wait_seconds": 5,
+  "send_gate_max_wait_seconds": 20,
   "send_gate_max_window_seconds": 20,
 
   "send_gate_onnx_enable": true,
@@ -149,6 +149,7 @@ AstrBot/data/plugins/astrbot_plugin_attention_gate
 | `send_gate_enforce_groups` | 真实窗口生效群，空=全部 |
 | `send_gate_enforce_private` | 是否处理私聊 |
 | `send_gate_min_wait_seconds` | 最后一条消息后的最短安静时间 |
+| `send_gate_max_wait_seconds` | 从 root 到达开始的总等待上限 |
 | `send_gate_max_window_seconds` | 硬窗口上限 |
 | `send_gate_onnx_enable` | 启用 ONNX 句尾节奏 |
 | `send_gate_jev_enable` | 启用 Jev 完整性判断 |
@@ -246,8 +247,14 @@ root 释放原请求
 私聊：真实窗口
 主动回复：真实窗口
 poke：真实窗口
-follow-up：真实窗口
+群聊普通跟进：由群消息事件缓冲合并
+框架 follow-up capture：若平台已消费，不会重新进入 gate
 ```
+
+> 说明：AstrBot 的 follow-up capture 会在 OnWaitingLLMRequest 之前把消息并入
+> 正在运行的 Agent 轮次；这类消息不会重新产生 LLM 请求，因此 gate 无法再拦截。
+> 群聊中未产生独立请求的普通跟进由本插件的群消息缓冲覆盖。
+
 
 ### ONNX + Jev
 
@@ -317,7 +324,9 @@ data/plugin_data/astrbot_plugin_attention_gate/send_gate_dryrun_YYYYMMDD.jsonl
 
 - Jev 请求失败/超时/限流时，主动决策直接 pass；
 - Jev 完整性失败时最终会释放，不永久阻塞；
-- `send_gate_max_wait_seconds` 当前不是严格总等待上限，实际主要看 `min_wait + max_window`；
+- `send_gate_max_wait_seconds` 与 `max_window` 同时作为总时长上限，取更小值；
+- 主动回复当前仍有决策层 `active_reply_settle_seconds=10` 的等待，随后再进入 send_gate 的 5 秒窗口，用户感知延迟约 15 秒；这是当前待收敛的“单一等待”设计差异；
+- AstrBot follow-up capture 在 OnWaitingLLMRequest 之前消费的消息不会重新进入 gate；群聊普通跟进由本插件缓冲覆盖，但框架已消费的 follow-up 不可拦截；
 - root 在等待前一个 LLM 请求释放 session lock 时，`window_age` 可能很大，但进入 gate 后会立即释放；
 - 图片只作为附件和合并内容，不做独立视觉理解；
 - 重启 AstrBot 后内存缓冲和窗口状态会清空。
@@ -334,5 +343,5 @@ python -m unittest discover -s tests -v
 当前版本：
 
 ```text
-v0.8.3
+v0.8.5
 ```

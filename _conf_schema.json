@@ -16,13 +16,8 @@
     "items": {
       "type": "string"
     },
-    "default": [
-      "123456789",
-      "123456788",
-      "123456787",
-      "123456786"
-    ],
-    "hint": "填写时只在这些群生效；清空后对所有群聊生效。未配置 group_topic_schemes 的群只使用人格兴趣层。"
+    "default": [],
+    "hint": "空列表表示所有群聊；填写时只在这些群生效"
   },
   "bot_names": {
     "description": "【基础】Bot 的称呼",
@@ -671,7 +666,7 @@
         ]
       }
     ],
-    "hint": "每个问题一条；可单独开关、改文案、改阈值；noul 填 true/false 描述，score 填等级列表",
+    "hint": "每个问题一条；可单独开关和改文案，不提供逐问题阈值",
     "templates": {
       "question": {
         "name": "Jev 问题",
@@ -725,16 +720,16 @@
     }
   },
   "send_gate_enable": {
-    "description": "【发送门控】启用统一消息发送门控观察层",
+    "description": "【发送门控】启用统一消息发送门控",
     "type": "bool",
     "default": false,
-    "hint": "当前只实现 dry-run；开启后仅记录，不改变真实发送"
+    "hint": "开启后仍需选择 dry-run 或真实窗口"
   },
   "send_gate_enforce": {
     "description": "【发送门控】启用真实窗口发送",
     "type": "bool",
     "default": false,
-    "hint": "当前阶段只对普通群聊/私聊生效；开启前必须停用旧 debounce"
+    "hint": "开启前必须停用旧 debounce；当前覆盖普通聊天/私聊/主动回复/poke/群消息跟进"
   },
   "send_gate_enforce_groups": {
     "description": "【发送门控】真实窗口生效群",
@@ -751,15 +746,40 @@
     "default": false
   },
   "send_gate_dry_run": {
-    "description": "【发送门控】发送门控 dry-run",
+    "description": "【发送门控】发送门控 dry-run（仅观察）",
     "type": "bool",
     "default": true,
     "hint": "只记录 would_root/would_merge/would_release，不延迟、不停止、不改写请求"
   },
+  "send_gate_min_wait_seconds": {
+    "description": "【发送门控】真实窗口最短安静等待（秒）",
+    "type": "int",
+    "default": 5,
+    "hint": "最后一条消息后至少安静这么久才释放；默认 5 秒，覆盖群聊连发"
+  },
+  "send_gate_max_wait_seconds": {
+    "description": "【发送门控】真实窗口总等待上限（秒）",
+    "type": "int",
+    "default": 20,
+    "hint": "从 root 到达开始计算的总等待上限，与 max_window 取更小值"
+  },
+  "send_gate_max_window_seconds": {
+    "description": "【发送门控】窗口硬上限（秒）",
+    "type": "int",
+    "default": 20,
+    "hint": "lane 超过该时间后不再合并；真实等待还受 max_wait 限制"
+  },
+  "send_gate_cleanup_seconds": {
+    "description": "【发送门控】lane 清理时间（秒）",
+    "type": "int",
+    "default": 180,
+    "hint": "无活动 lane/recent buffer 的清理阈值"
+  },
   "send_gate_onnx_enable": {
     "description": "【发送门控】启用 ONNX 句尾节奏",
     "type": "bool",
-    "default": false
+    "default": false,
+    "hint": "模型缺失或依赖缺失时自动降级为纯时间窗口"
   },
   "send_gate_onnx_model_path": {
     "description": "【发送门控】ONNX 模型目录",
@@ -779,23 +799,20 @@
   "send_gate_onnx_low_threshold": {
     "description": "【发送门控】ONNX 低分阈值",
     "type": "float",
-    "default": 0.35
+    "default": 0.35,
+    "hint": "低于该分数时延长等待"
   },
   "send_gate_onnx_low_wait_seconds": {
-    "description": "【发送门控】ONNX 低分延长时间",
+    "description": "【发送门控】ONNX 低分延长时间（秒）",
     "type": "int",
-    "default": 3
+    "default": 6,
+    "hint": "低于低分阈值时至少等待这么久；默认大于 min_wait"
   },
   "send_gate_jev_enable": {
     "description": "【发送门控】启用 Jev 完整性判断",
     "type": "bool",
-    "default": false
-  },
-  "send_gate_revalidate_proactive": {
-    "description": "【发送门控】主动回复新增消息时重新验证",
-    "type": "bool",
-    "default": true,
-    "hint": "窗口内出现补充消息时调用 Jev 重新确认是否仍适合按原目标回复"
+    "default": false,
+    "hint": "只问 is_burst_complete，不重复判断人格/话题/风险"
   },
   "send_gate_jev_complete_threshold": {
     "description": "【发送门控】Jev 完整阈值",
@@ -803,12 +820,30 @@
     "default": 0.65
   },
   "send_gate_jev_incomplete_wait_seconds": {
-    "description": "【发送门控】Jev 不完整时额外等待",
+    "description": "【发送门控】Jev 不完整时额外等待（秒）",
     "type": "int",
     "default": 2
   },
+  "send_gate_revalidate_proactive": {
+    "description": "【发送门控】主动回复新增消息时重新验证",
+    "type": "bool",
+    "default": true,
+    "hint": "窗口内出现补充消息时调用 Jev 重新确认是否仍适合按原目标回复"
+  },
+  "send_gate_revalidate_failure_policy": {
+    "description": "【发送门控】revalidate 失败策略",
+    "type": "string",
+    "default": "keep_with_guard",
+    "options": [
+      "keep",
+      "drop",
+      "keep_with_guard",
+      "retry_once_then_drop"
+    ],
+    "hint": "revalidate 超时/异常时的处理方式"
+  },
   "send_gate_enabled_groups": {
-    "description": "【发送门控】发送门控观察群",
+    "description": "【发送门控】观察范围群（仅 dry-run）",
     "type": "list",
     "default": [],
     "hint": "空列表表示全部群聊",
@@ -817,35 +852,14 @@
     }
   },
   "send_gate_observe_private": {
-    "description": "【发送门控】观察私聊请求",
+    "description": "【发送门控】观察私聊请求（仅 dry-run）",
     "type": "bool",
     "default": true
-  },
-  "send_gate_max_window_seconds": {
-    "description": "【发送门控】dry-run 窗口长度（秒）",
-    "type": "int",
-    "default": 30
-  },
-  "send_gate_cleanup_seconds": {
-    "description": "【发送门控】lane 清理时间（秒）",
-    "type": "int",
-    "default": 180
-  },
-  "send_gate_min_wait_seconds": {
-    "description": "【发送门控】dry-run 模拟最短等待（秒）",
-    "type": "int",
-    "default": 5,
-    "hint": "默认 5 秒，覆盖群聊连发；太小会漏掉后续 follow-up"
-  },
-  "send_gate_max_wait_seconds": {
-    "description": "【发送门控】dry-run 模拟最长等待（秒）",
-    "type": "int",
-    "default": 10
   },
   "send_gate_log_content": {
     "description": "【发送门控】日志记录消息前缀",
     "type": "bool",
     "default": false,
-    "hint": "仅 dry-run 调试用，打开后记录前 80 字"
+    "hint": "仅在调试时打开，记录前 80 字"
   }
 }
