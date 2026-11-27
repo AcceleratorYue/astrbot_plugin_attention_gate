@@ -756,6 +756,51 @@
     "default": true,
     "hint": "只记录 would_root/would_merge/would_release，不延迟、不停止、不改写请求"
   },
+  "send_gate_onnx_enable": {
+    "description": "【发送门控】启用 ONNX 句尾节奏",
+    "type": "bool",
+    "default": false
+  },
+  "send_gate_onnx_model_path": {
+    "description": "【发送门控】ONNX 模型目录",
+    "type": "string",
+    "default": "",
+    "hint": "留空使用旧 debounce 的 normal 模型"
+  },
+  "send_gate_onnx_model_type": {
+    "description": "【发送门控】ONNX 模型类型",
+    "type": "string",
+    "default": "normal",
+    "options": [
+      "small",
+      "normal"
+    ]
+  },
+  "send_gate_onnx_low_threshold": {
+    "description": "【发送门控】ONNX 低分阈值",
+    "type": "float",
+    "default": 0.35
+  },
+  "send_gate_onnx_low_wait_seconds": {
+    "description": "【发送门控】ONNX 低分延长时间",
+    "type": "int",
+    "default": 3
+  },
+  "send_gate_jev_enable": {
+    "description": "【发送门控】启用 Jev 完整性判断",
+    "type": "bool",
+    "default": false
+  },
+  "send_gate_jev_complete_threshold": {
+    "description": "【发送门控】Jev 完整阈值",
+    "type": "float",
+    "default": 0.65
+  },
+  "send_gate_jev_incomplete_wait_seconds": {
+    "description": "【发送门控】Jev 不完整时额外等待",
+    "type": "int",
+    "default": 2
+  },
   "send_gate_enabled_groups": {
     "description": "【发送门控】发送门控观察群",
     "type": "list",

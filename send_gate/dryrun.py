@@ -25,6 +25,7 @@ from .request_kind import (
     CHAT,
     CHAT_PRIVATE,
     INTERNAL,
+    PROACTIVE,
     UNKNOWN,
     USER_FACING_KINDS,
     RequestInfo,
@@ -32,7 +33,8 @@ from .request_kind import (
 )
 
 ROOT_EXTRA = "_send_gate_root_token"
-ENFORCE_KINDS = {CHAT, CHAT_PRIVATE}
+ENFORCE_KINDS = USER_FACING_KINDS
+COMPLETENESS_KINDS = {CHAT, CHAT_PRIVATE}
 
 
 @dataclasses.dataclass
@@ -53,6 +55,12 @@ class _Lane:
     last_kind: str
     token: str = ""
     messages: list[_Buffered] = dataclasses.field(default_factory=list)
+    root_text: str = ""
+    root_kind: str = ""
+    root_images: list[str] = dataclasses.field(default_factory=list)
+    onnx_score: float | None = None
+    jev_score: float | None = None
+    jev_checked: bool = False
     last_llm_at: float = 0.0
 
 
@@ -64,11 +72,15 @@ class SendGateObserver:
         data_dir_getter: Callable[[], Path],
         logger: Any,
         config_getter: Callable[[str, Any], Any] | None = None,
+        onnx: Any = None,
+        completeness_getter: Callable[[str], Any] | None = None,
     ) -> None:
         self._config = config
         self._config_getter = config_getter
         self._data_dir_getter = data_dir_getter
         self._logger = logger
+        self._onnx = onnx
+        self._completeness_getter = completeness_getter
         self._lanes: dict[str, _Lane] = {}
         self._non_dry_run_warned = False
 
@@ -213,6 +225,9 @@ class SendGateObserver:
                         root_message_id=info.message_id,
                         last_kind=info.kind,
                         token=token,
+                        root_text=info.text,
+                        root_kind=info.kind,
+                        root_images=self._image_sources(event),
                     )
                     self._lanes[key] = lane
                     try:
@@ -316,6 +331,8 @@ class SendGateObserver:
                     image_count=len(getattr(req, "image_urls", None) or ()),
                     merged_messages=merged,
                     enforce=True,
+                    onnx_score=lane.onnx_score,
+                    jev_score=lane.jev_score,
                 )
                 self._lanes.pop(key, None)
                 return
@@ -357,17 +374,74 @@ class SendGateObserver:
     async def _wait_for_window(self, lane: _Lane) -> int:
         min_wait = self._int("send_gate_min_wait_seconds", 2, 0)
         max_window = self._int("send_gate_max_window_seconds", 20, 1)
+        low_wait = self._int("send_gate_onnx_low_wait_seconds", 3, 0)
         started = time.time()
+        extended = False
         while True:
             now = time.time()
             release_at = min(
                 lane.last_at + min_wait,
                 lane.first_at + max_window,
             )
-            if now >= release_at:
-                break
-            await asyncio.sleep(min(0.05, max(0.01, release_at - now)))
+            if now < release_at:
+                await asyncio.sleep(min(0.05, max(0.01, release_at - now)))
+                continue
+
+            if not extended and self._onnx is not None:
+                text = self._lane_text(lane)
+                score = await self._onnx.score(text)
+                if score is not None:
+                    lane.onnx_score = score
+                    low_threshold = float(
+                        self._cfg("send_gate_onnx_low_threshold", 0.35)
+                    )
+                    if score < low_threshold and low_wait > 0:
+                        extended = True
+                        extra_until = min(
+                            lane.last_at + low_wait,
+                            lane.first_at + max_window,
+                        )
+                        if extra_until > time.time():
+                            await asyncio.sleep(
+                                min(0.05, max(0.01, extra_until - time.time()))
+                            )
+                            continue
+
+            if (
+                not lane.jev_checked
+                and self._completeness_getter is not None
+                and lane.last_kind in (CHAT, CHAT_PRIVATE)
+                and self._bool("send_gate_jev_enable", False)
+            ):
+                lane.jev_checked = True
+                text = self._lane_text(lane)
+                try:
+                    jev_value = await self._completeness_getter(text)
+                except Exception:
+                    jev_value = None
+                if jev_value is not None:
+                    lane.jev_score = float(jev_value)
+                    threshold = float(
+                        self._cfg("send_gate_jev_complete_threshold", 0.65)
+                    )
+                    if lane.jev_score < threshold:
+                        extra_wait = self._int(
+                            "send_gate_jev_incomplete_wait_seconds", 2, 0
+                        )
+                        remaining = lane.first_at + max_window - time.time()
+                        if remaining > 0 and extra_wait > 0:
+                            await asyncio.sleep(min(float(extra_wait), remaining))
+                            continue
+            break
         return max(0, int((time.time() - started) * 1000))
+
+    def _lane_text(self, lane: _Lane) -> str:
+        parts = [str(lane.root_text or "").strip()]
+        for item in lane.messages:
+            text = str(item.text or "").strip()
+            if text:
+                parts.append(text)
+        return "\n".join(x for x in parts if x)[:3000]
 
     async def _merge_into_request(self, req: Any, lane: _Lane) -> int:
         if not lane.messages:
@@ -385,6 +459,11 @@ class SendGateObserver:
                 "请合并理解，不要逐条重复回答]\n"
                 + "\n".join(lines)
             )
+            if lane.root_kind == PROACTIVE:
+                block += (
+                    "\n[发送门控提醒] 如果新消息已经明显偏离原主动目标，"
+                    "或无法确认该接哪句话，请调用 keep_silent，不要强行回复。"
+                )
             try:
                 req.prompt = base + block
             except Exception:
@@ -463,6 +542,8 @@ class SendGateObserver:
         image_count: int = 0,
         merged_messages: int = 0,
         enforce: bool = False,
+        onnx_score: float | None = None,
+        jev_score: float | None = None,
     ) -> None:
         record = {
             "ts": time.time(),
@@ -485,6 +566,10 @@ class SendGateObserver:
             "dry_run": self._dryrun_enabled(),
             "enforce": bool(enforce),
         }
+        if onnx_score is not None:
+            record["onnx_score"] = round(float(onnx_score), 4)
+        if jev_score is not None:
+            record["jev_score"] = round(float(jev_score), 4)
         if self._bool("send_gate_log_content", False):
             record["content_preview"] = str(info.text or "")[:80]
         try:

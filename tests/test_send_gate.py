@@ -147,7 +147,7 @@ class SchemaOrderTests(unittest.TestCase):
                 encoding="utf-8"
             )
         )
-        self.assertEqual(len(schema), 68)
+        self.assertEqual(len(schema), 76)
         self.assertTrue(schema["enable"]["description"].startswith("【基础】"))
         self.assertTrue(schema["api_key"]["description"].startswith("【Jev】"))
         self.assertTrue(
@@ -240,6 +240,36 @@ class DryRunObserverTests(unittest.TestCase):
         after = FakeEvent(text="释放后消息", msg_id="a1")
         run(self.observer.observe_waiting(after))
         self.assertEqual(self.observer.stats()["lanes"], 1)
+
+    def test_enforce_completeness_callback(self):
+        calls = []
+        async def completeness(text):
+            calls.append(text)
+            return 0.0
+        observer = SendGateObserver(
+            config=FakeConfig(
+                {
+                    "send_gate_enable": True,
+                    "send_gate_dry_run": True,
+                    "send_gate_enforce": True,
+                    "send_gate_enforce_groups": [],
+                    "send_gate_enforce_private": False,
+                    "send_gate_min_wait_seconds": 0,
+                    "send_gate_max_window_seconds": 1,
+                    "send_gate_jev_enable": True,
+                    "send_gate_jev_complete_threshold": 0.65,
+                    "send_gate_jev_incomplete_wait_seconds": 0,
+                }
+            ),
+            data_dir_getter=lambda: Path(self.tmp.name),
+            logger=FakeLogger(),
+            completeness_getter=completeness,
+        )
+        root = FakeEvent(text="没说完", msg_id="r2")
+        req = SimpleNamespace(prompt="没说完", image_urls=[])
+        run(observer.observe_waiting(root))
+        run(observer.observe_llm(root, req))
+        self.assertEqual(calls, ["没说完"])
 
     def test_release_closes_lane(self):
         first = FakeEvent(text="第一句", msg_id="m1")
