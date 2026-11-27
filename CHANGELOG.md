@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.9.4 (2026-11-28)
+修复晚到 root 的门控失效、取消路径冷却泄漏，并移除旧 debounce 依赖与个人化默认值。
+
+### 发送门控
+- root 晚于窗口进入 `on_llm_request` 时，用 root token/ticket 恢复 lane，不再走无管理的直接放行。
+- 主动候选缺少 root 票据、决策器缺失或决策失败时 fail closed，停止请求并回滚预占冷却。
+- 主动候选获得 `send_gate_late_decision_grace_seconds` 决策宽限，不再用 0.01 秒超时取消 Jev。
+- 任务取消（`CancelledError`）、超时、拒绝、重复拦截、提交失败都会恢复进入候选前的冷却值。
+- 只有真正的主动候选才触发冷却回滚；普通聊天、follow-up 等非候选事件不会再把群冷却清零。
+- 新增候选待处理超时：请求长时间未进入 LLM hook 时恢复预占冷却，避免群被静默锁住。
+- 所有 lane 关闭都校验归属，旧请求不会误删同一用户的新 root。
+- 主动候选在 `request_llm` 前确定主聊天模型，避免延迟决策落到 functional provider。
+- 非 local agent runner 下自动退回非延迟判断，并记录一次原因。
+- 主动回复 dispatch 改为先完成可能失败的 provider/prompt 步骤，再写入 cooldown/dispatches。
+- 普通聊天 root 晚到时恢复 lane 并合并缓冲，不重复等待完整窗口。
+
+### Jev
+- `jev_timeout_seconds` 默认从 25 秒改为 8 秒，小于发送窗口 20 秒。
+- 发送窗口内的 Jev 请求按剩余时间进一步收紧，避免被外层超时在最后时刻取消。
+- Jev 重试受同一 deadline 约束，避免重试拖过窗口。
+
+### ONNX 模型来源
+- 新增 ModelScope 自动下载：`advent259141/astrbot_debouncer_small` 与 `advent259141/astrbot_debouncer_normal`。
+- 新增 `send_gate_onnx_auto_download` 与 `send_gate_onnx_download_timeout_seconds`。
+- 删除 `astrbot_plugin_debounce` 目录回退；插件不再读取其它插件的数据目录。
+- 模型缺失时后台下载/加载，期间降级为纯时间窗口；README 补充来源、文件清单和离线部署方式。
+- 下载按上游文件清单校验大小与 SHA256，支持损坏文件自动重下；临时文件唯一化并支持插件重载取消。
+- `api_key` 标记为 `secret`；README 补充借鉴来源、模型许可、预筛与日志数据说明。
+
+### 规范化
+- 默认人格、兴趣词、群话题、示例群号全部改为中性空配置，不再内置作者个人设定。
+- Jev 默认地址/模型改为通用 TypeSafe 默认值，TokenRhythm/NeoHorse 仍可通过配置使用。
+- 修复 User-Agent 版本残留、文件头“只做群聊”、机器人发言名硬编码。
+- 配置 schema 移除精确数量断言，新增晚到/取消/ONNX 来源回归测试。
+- 移除过期的第三方 context_aware 补丁文件。
+
 ## 0.9.3 (2026-11-28)
 安装依赖自动化，并整理发布配置。
 

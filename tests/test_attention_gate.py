@@ -2,18 +2,24 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from astrbot.api.message_components import Plain  # noqa: E402
+
 from main import (  # noqa: E402
-    AttentionGatePlugin,
+    ACTIVE_CANDIDATE_EXTRA,
     DEFAULT_GROUP_TOPIC_SCHEMES,
     DEFAULT_QUESTIONS,
+    VERSION,
+    AttentionGatePlugin,
     cosine_similarity,
     decide_answers,
     extract_nouls,
@@ -25,7 +31,6 @@ from main import (  # noqa: E402
     profile_text,
     question_schemes_to_questions,
 )
-from astrbot.api.message_components import Plain  # noqa: E402
 
 
 class FakeConfig:
@@ -37,14 +42,18 @@ class FakeConfig:
 
 
 class FakeMessage:
-    def __init__(self, text: str = "今天摸鱼好开心", message_id: str = "123456") -> None:
+    def __init__(
+        self, text: str = "今天摸鱼好开心", message_id: str = "123456"
+    ) -> None:
         self.text = text  # type: ignore[assignment]
         self.message_id = message_id
         self.raw_message = {"message_id": message_id}
 
 
 class FakeEvent:
-    def __init__(self, text: str = "今天摸鱼好开心", message_id: str = "123456") -> None:
+    def __init__(
+        self, text: str = "今天摸鱼好开心", message_id: str = "123456"
+    ) -> None:
         self.message_str = text
         self.message_obj = FakeMessage(text, message_id)
         self.is_at_or_wake_command = False
@@ -128,7 +137,7 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
         plugin._data_dir = None
         plugin._ledger = lambda record: None
 
-        async def fake_call_jev(state, questions):
+        async def fake_call_jev(state, questions, **kwargs):
             return {
                 "answers": {
                     "is_persona_fit": {"type": "noul", "noul": 0.9},
@@ -170,7 +179,7 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
 
         calls = []
 
-        async def fake_call_jev(state, questions):
+        async def fake_call_jev(state, questions, **kwargs):
             calls.append(1)
             return {"answers": {}}
 
@@ -181,7 +190,6 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
             pass
         self.assertEqual(calls, [])
         self.assertEqual(len(plugin._state("123456789")["buffer"]), 1)
-
 
 
 class DecideTests(unittest.TestCase):
@@ -512,7 +520,12 @@ class ParsingTests(unittest.TestCase):
     def test_passive_interest_flag(self) -> None:
         result = normalize_interest_groups(
             [
-                {"name": "解题", "enabled": True, "keywords": ["题"], "proactive": False},
+                {
+                    "name": "解题",
+                    "enabled": True,
+                    "keywords": ["题"],
+                    "proactive": False,
+                },
                 {"name": "鲸鱼", "enabled": True, "keywords": ["鲸"]},
             ]
         )
@@ -520,9 +533,7 @@ class ParsingTests(unittest.TestCase):
         self.assertTrue(result[1]["proactive"])
 
     def test_passive_topic_flag(self) -> None:
-        topics = parse_topic_lines(
-            ["游戏|85|MC,开黑", "群友日常|45|今天,上班|被动"]
-        )
+        topics = parse_topic_lines(["游戏|85|MC,开黑", "群友日常|45|今天,上班|被动"])
         self.assertTrue(topics[0]["proactive"])
         self.assertFalse(topics[1]["proactive"])
 
@@ -571,7 +582,8 @@ class ParsingTests(unittest.TestCase):
         self.assertIn("is_persona_fit", DEFAULT_QUESTIONS)
         self.assertIn("is_group_topic_fit", DEFAULT_QUESTIONS)
         self.assertIn("is_impulse", DEFAULT_QUESTIONS)
-        self.assertIn("123456789", {x["group_id"] for x in DEFAULT_GROUP_TOPIC_SCHEMES})
+        # 内置默认值不包含任何个人群号或话题模板，部署者按需配置。
+        self.assertEqual(DEFAULT_GROUP_TOPIC_SCHEMES, [])
 
 
 class EndpointTests(unittest.TestCase):
@@ -599,6 +611,90 @@ class EndpointTests(unittest.TestCase):
     def test_full_decision_url_is_kept(self) -> None:
         url = "http://127.0.0.1:8080/v1/decision"
         self.assertEqual(self._endpoint(url), url)
+
+
+class ActiveCandidateCooldownTests(unittest.IsolatedAsyncioTestCase):
+    def _plugin(
+        self, cooldown_prev: float = 5.0
+    ) -> tuple[AttentionGatePlugin, object, dict]:
+        plugin = object.__new__(AttentionGatePlugin)
+        plugin.config = FakeConfig({"cooldown_seconds": 120})
+        plugin._states = {}
+        plugin._data_dir = None
+        plugin._ledger = lambda record: None
+        event = FakeEvent()
+        event.set_extra(
+            ACTIVE_CANDIDATE_EXTRA,
+            {
+                "group_id": "123456789",
+                "message_id": "123456",
+                "cooldown_prev": cooldown_prev,
+            },
+        )
+        state = plugin._state("123456789")
+        state["cooldown_until"] = 999.0
+        return plugin, event, state
+
+    async def test_restore_is_idempotent(self) -> None:
+        plugin, event, state = self._plugin()
+        plugin._restore_active_candidate_cooldown(event)
+        self.assertEqual(state["cooldown_until"], 5.0)
+        state["cooldown_until"] = 123.0
+        plugin._restore_active_candidate_cooldown(event)
+        self.assertEqual(state["cooldown_until"], 123.0)
+
+    async def test_plain_event_restore_is_noop(self) -> None:
+        plugin = object.__new__(AttentionGatePlugin)
+        plugin.config = FakeConfig({})
+        plugin._states = {}
+        plugin._ledger = lambda record: None
+        state = plugin._state("123456789")
+        state["cooldown_until"] = 100.0
+        event = FakeEvent()
+        plugin._restore_active_candidate_cooldown(event)
+        self.assertEqual(state["cooldown_until"], 100.0)
+
+    async def test_candidate_pending_timeout_restores_previous_cooldown(self) -> None:
+        plugin = object.__new__(AttentionGatePlugin)
+        plugin.config = FakeConfig({"send_gate_candidate_pending_timeout_seconds": 10})
+        plugin._states = {}
+        plugin._ledger = lambda record: None
+        state = plugin._state("123456789")
+        state["cooldown_until"] = 999.0
+        state["active_candidate_pending"] = {
+            "id": "p1",
+            "at": 100.0,
+            "prev": 5.0,
+            "reserved_until": 999.0,
+        }
+        plugin._expire_candidate_pending(state, 1000.0)
+        self.assertEqual(state["cooldown_until"], 5.0)
+        self.assertIsNone(state["active_candidate_pending"])
+
+    async def test_restore_does_not_clobber_newer_dispatch(self) -> None:
+        plugin, event, state = self._plugin()
+        payload = event.get_extra(ACTIVE_CANDIDATE_EXTRA)
+        payload["cooldown_reserved_until"] = 999.0
+        payload["cooldown_prev"] = 5.0
+        event.set_extra(ACTIVE_CANDIDATE_EXTRA, payload)
+        state["cooldown_until"] = 1234.0
+        plugin._restore_active_candidate_cooldown(event)
+        self.assertEqual(state["cooldown_until"], 1234.0)
+
+    async def test_cancelled_judge_restores_cooldown(self) -> None:
+        plugin, event, state = self._plugin(cooldown_prev=7.0)
+        target = {"message_id": "123456", "sender_id": "10001", "content": "x"}
+        plugin._find_buffer_record = lambda group_id, message_id: target  # type: ignore[assignment]
+        plugin._judge = lambda *args, **kwargs: _raise_cancelled()  # type: ignore[assignment]
+        with self.assertRaises(asyncio.CancelledError):
+            await plugin._send_gate_active_judge(
+                event, SimpleNamespace(prompt="x"), object()
+            )
+        self.assertEqual(state["cooldown_until"], 7.0)
+
+
+async def _raise_cancelled():
+    raise asyncio.CancelledError
 
 
 class JevRequestTests(unittest.TestCase):
@@ -637,9 +733,31 @@ class JevRequestTests(unittest.TestCase):
 
         self.assertEqual(captured["url"], "http://127.0.0.1:8080/v1/systemone")
         self.assertNotIn("Authorization", captured["headers"])
+        self.assertEqual(
+            captured["headers"].get("User-agent"),
+            f"astrbot-plugin-attention-gate/{VERSION}",
+        )
         self.assertIn(b"NeoHorse-Jev-4B", captured["body"])
         payload = json.loads(captured["body"].decode("utf-8"))
         self.assertIsInstance(payload["state"], str)
+
+
+class JevTimeoutTests(unittest.IsolatedAsyncioTestCase):
+    async def test_send_gate_budget_clamps_configured_timeout(self) -> None:
+        plugin = object.__new__(AttentionGatePlugin)
+        plugin.config = FakeConfig({"jev_timeout_seconds": 25.0})
+        captured = {}
+
+        def fake_sync(state, questions, timeout=30.0):
+            captured["timeout"] = timeout
+            return {"answers": {}}
+
+        plugin._call_jev_sync = fake_sync  # type: ignore[assignment]
+        await plugin._call_jev({}, {}, timeout=1.5)
+        self.assertGreater(captured["timeout"], 0)
+        self.assertLessEqual(captured["timeout"], 1.5)
+        # 默认 25 秒不能让发送窗口里的请求一直占到最后。
+        self.assertLess(captured["timeout"], 25.0)
 
 
 class PrefilterTests(unittest.IsolatedAsyncioTestCase):
@@ -651,6 +769,14 @@ class PrefilterTests(unittest.IsolatedAsyncioTestCase):
                 "embedding_threshold": 0.42,
                 "embedding_low_threshold": 0.30,
                 "impulse_enabled": True,
+                "global_interests": [
+                    {
+                        "name": "测试兴趣",
+                        "weight": 50,
+                        "keywords": ["alpha"],
+                        "proactive": True,
+                    }
+                ],
             }
         )
         plugin._msg_embedding_cache = {}
@@ -873,7 +999,12 @@ class StateTests(unittest.TestCase):
         )
         self.plugin._note_unanswered(
             state,
-            {"message_id": "2", "sender_name": "鲸鲸", "content": "自己", "is_self": True},
+            {
+                "message_id": "2",
+                "sender_name": "机器人",
+                "content": "自己",
+                "is_self": True,
+            },
         )
         self.assertEqual(len(state["unanswered"]), 1)
         self.assertEqual(state["unanswered"][0]["content"], "还没接的话")

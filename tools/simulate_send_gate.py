@@ -6,8 +6,8 @@
     python tools/simulate_send_gate.py
 
 默认读取：
-    群聊记录_751966140/journal.jsonl
-    群聊记录_957302634/journal.jsonl
+    群聊记录_<群号>/journal.jsonl
+    群聊记录_<群号>/journal.jsonl
 
 模拟口径：
 - addressed：只把“明确 @ 本体”的人类消息当 root；
@@ -25,7 +25,6 @@ import datetime as dt
 import json
 import re
 from pathlib import Path
-from typing import Iterable
 
 
 @dataclasses.dataclass(frozen=True)
@@ -201,8 +200,7 @@ def simulate(
         "gap_ms_p90": percentile(all_gaps, 0.90),
         "burst_hist": dict(
             collections.Counter(
-                str(min(r.count, 5)) if r.count < 5 else "5+"
-                for r in roots
+                str(min(r.count, 5)) if r.count < 5 else "5+" for r in roots
             )
         ),
         "max_window": max_window,
@@ -258,11 +256,26 @@ def render_markdown(results: list[dict], args: argparse.Namespace) -> str:
     return "\n".join(lines)
 
 
+def _discover_groups(root: Path) -> list[tuple[str, Path]]:
+    """从 root 下的 群聊记录*/journal.jsonl 自动发现群记录。"""
+    groups: list[tuple[str, Path]] = []
+    for path in sorted(root.glob("群聊记录*/journal.jsonl")):
+        folder = path.parent.name
+        group = folder.removeprefix("群聊记录_") or folder
+        groups.append((group, path))
+    return groups
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--root", type=Path, default=Path(r"D:/QQbot"))
-    parser.add_argument("--self-id", default="3909610392")
-    parser.add_argument("--self-name", action="append", default=["哦鲸鲸", "鲸鲸"])
+    parser.add_argument("--root", type=Path, default=Path("."))
+    parser.add_argument("--self-id", default="", help="Bot 的 QQ 号")
+    parser.add_argument(
+        "--self-name",
+        action="append",
+        default=[],
+        help="Bot 的称呼，可重复传入；默认不猜名字",
+    )
     parser.add_argument("--max-window", type=float, default=30)
     parser.add_argument("--max-wait", type=float, default=10)
     parser.add_argument("--min-wait", type=float, default=2)
@@ -270,21 +283,21 @@ def main() -> None:
     parser.add_argument("--md-out", type=Path, default=None)
     args = parser.parse_args()
 
-    groups = [
-        ("751966140", args.root / "群聊记录_751966140" / "journal.jsonl"),
-        ("957302634", args.root / "群聊记录_957302634" / "journal.jsonl"),
-    ]
-    bot_names: set[str] = set()
-    bot_ids: set[str] = set()
-    # 751 的 bots.json 是 ID 列表；957 的 bots.json 是名字列表。
-    for group, path in groups:
+    if not args.self_id:
+        parser.error("请用 --self-id 指定 Bot 的 QQ 号")
+
+    groups = _discover_groups(args.root)
+    if not groups:
+        parser.error(f"在 {args.root} 下没有找到 群聊记录*/journal.jsonl")
+    bot_names: set[str] = set(args.self_name)
+    bot_ids: set[str] = {args.self_id}
+    for _group, path in groups:
         bots_path = path.parent / "bots.json"
         if not bots_path.exists():
             continue
         data = json.loads(bots_path.read_text(encoding="utf-8"))
         bot_ids.update(str(x) for x in data.get("ids", []))
         bot_names.update(str(x) for x in data.get("names", []))
-    bot_names.update({"小德", "小德2号", "宵崎奏", "Tantalite", "蓝色大肥鱼"})
 
     all_results: list[dict] = []
     for group, path in groups:

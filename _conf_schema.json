@@ -25,10 +25,8 @@
     "items": {
       "type": "string"
     },
-    "default": [
-      "鲸鲸"
-    ],
-    "hint": "消息里明确叫到这些名字时，视为对当前 Bot 说话；不会被“指向别人”硬门拦截"
+    "default": [],
+    "hint": "消息里明确叫到这些名字时，视为对当前 Bot 说话；默认留空，按需填写"
   },
   "other_bot_ids": {
     "description": "【基础】其他 Bot 的 QQ 号",
@@ -40,33 +38,36 @@
     "hint": "这些账号只进入上下文，不参与判断"
   },
   "api_key": {
-    "description": "【Jev】TokenRhythm API Key",
+    "description": "【Jev】Jev API Key",
     "type": "string",
     "default": "",
-    "hint": "TokenRhythm 平台必填 sk_ Key；自托管无鉴权可留空"
+    "hint": "按 Jev 服务商要求填写；自托管无鉴权服务可留空",
+    "obvious_hint": true,
+    "secret": true
   },
   "model": {
     "description": "【Jev】Jev 模型 ID",
     "type": "string",
-    "default": "NeoHorse-Jev-4B",
-    "hint": "TokenRhythm 当前固定 NeoHorse-Jev-4B"
+    "default": "jev-latest",
+    "hint": "按服务商文档填写；例如官方 TypeSafe 使用 jev-latest"
   },
   "jev_provider_url": {
     "description": "【Jev】Jev 服务地址",
     "type": "string",
-    "default": "https://tokenrhythm.studio/v1/decision",
-    "hint": "可填完整 /v1/decision 或 /v1/systemone；根地址自动补 /v1/systemone"
+    "default": "https://api.typesafe.ai/v1",
+    "hint": "可填服务根地址、完整 /v1/systemone 或 /v1/decision；根地址自动补 /v1/systemone"
   },
   "state_as_text": {
     "description": "【Jev】把 state 转成 JSON 文本发送",
     "type": "bool",
     "default": true,
-    "hint": "NeoHorse SystemOne 以文本 state 为主"
+    "hint": "多数 Jev SystemOne/Decision 接口以文本 state 为主；按服务商要求调整"
   },
   "jev_timeout_seconds": {
     "description": "【Jev】Jev 请求超时（秒）",
     "type": "float",
-    "default": 25.0
+    "default": 8.0,
+    "hint": "发送门控会按窗口剩余时间进一步收紧；默认 8 秒，小于总窗口 20 秒"
   },
   "jev_max_state_chars": {
     "description": "【Jev】Jev 状态最大字符数",
@@ -77,93 +78,13 @@
   "persona": {
     "description": "【人格与话题】人格描述（发给 Jev）",
     "type": "text",
-    "default": "我是鲸鲸，一只鲸鱼娘。性格活泼、嘴硬心软、会傲娇，但很少真的生气；我说话短，先给情绪反应，再给内容；我不会主动刷屏，也不会为了参与硬找话说。"
+    "default": "群聊助手，语气自然、简洁、友好；先理解上下文，再决定是否参与；不主动刷屏，也不为了参与硬找话说。"
   },
   "interest_groups": {
     "description": "【人格与话题】人格兴趣层（全局）",
     "type": "template_list",
-    "default": [
-      {
-        "__template_key": "interest",
-        "name": "解题与知识问答",
-        "enabled": true,
-        "weight": 85,
-        "keywords": [
-          "题",
-          "解题",
-          "为什么",
-          "原理",
-          "算法",
-          "答案"
-        ],
-        "aliases": "",
-        "proactive": false
-      },
-      {
-        "__template_key": "interest",
-        "name": "吃与零食",
-        "enabled": true,
-        "weight": 75,
-        "keywords": [
-          "吃",
-          "白饭",
-          "零食",
-          "饭",
-          "好吃",
-          "奶茶"
-        ],
-        "aliases": "",
-        "proactive": true
-      },
-      {
-        "__template_key": "interest",
-        "name": "鲸鱼与摸鱼",
-        "enabled": true,
-        "weight": 90,
-        "keywords": [
-          "鲸",
-          "鲸鱼",
-          "大肥鱼",
-          "小肥鱼",
-          "摸鱼",
-          "海"
-        ],
-        "aliases": "",
-        "proactive": true
-      },
-      {
-        "__template_key": "interest",
-        "name": "被夸与互动",
-        "enabled": true,
-        "weight": 60,
-        "keywords": [
-          "可爱",
-          "厉害",
-          "夸",
-          "喜欢你",
-          "抱抱"
-        ],
-        "aliases": "",
-        "proactive": true
-      },
-      {
-        "__template_key": "interest",
-        "name": "情绪陪伴",
-        "enabled": true,
-        "weight": 55,
-        "keywords": [
-          "累",
-          "难过",
-          "烦",
-          "委屈",
-          "安慰",
-          "开心"
-        ],
-        "aliases": "",
-        "proactive": true
-      }
-    ],
-    "hint": "所有群共享；每个方向单独开关、权重和词表",
+    "default": [],
+    "hint": "所有群共享；默认留空，只使用人格判断。按需添加兴趣方向",
     "templates": {
       "interest": {
         "name": "人格兴趣方向",
@@ -212,66 +133,8 @@
   "group_topic_schemes": {
     "description": "【人格与话题】群聊话题层（按群独立）",
     "type": "template_list",
-    "default": [
-      {
-        "__template_key": "group",
-        "group_id": "123456789",
-        "name": "示例群 A",
-        "enabled": true,
-        "topics": [
-          "游戏与联机|85|游戏,Minecraft,MC,VRChat,战雷,开黑",
-          "AI/插件/技术|75|模型,token,插件,提示词,部署,代码,桌宠",
-          "B站与视频|70|B站,视频,UP,评论区,弹幕,切片",
-          "玩梗与表情包|60|梗,表情包,图,斗嘴,吐槽,复读",
-          "群友日常|45|今天,上班,下班,睡觉,好累,刚刚"
-        ]
-      },
-      {
-        "__template_key": "group",
-        "group_id": "123456788",
-        "name": "示例群 B",
-        "enabled": true,
-        "topics": [
-          "玩梗与复读|80|梗,复读,哈基米,玩梗,转人工",
-          "脑筋急转弯与谜题|85|脑筋急转弯,谜题,为什么,答案,切比雪夫",
-          "摸头与互动|70|摸头,抱抱,贴贴,打闹,打招呼",
-          "角色扮演与图灵测试|65|角色扮演,图灵测试,扮演,AI,机器人",
-          "图片与表情包|60|图,图片,表情包,截图,画图",
-          "音乐与视频|55|歌,歌曲,音乐,视频,切片",
-          "深夜闲聊|40|深夜,睡不着,熬夜,晚安"
-        ]
-      },
-      {
-        "__template_key": "group",
-        "group_id": "123456787",
-        "name": "示例群 C",
-        "enabled": true,
-        "topics": [
-          "蔚蓝档案|90|蔚蓝档案,BA,老师,学生,阿罗娜",
-          "总力战与攻略|85|总力战,凹分,凹轴,攻略,配队,轴",
-          "抽卡与养成|80|抽卡,十连,出货,井,养成,角色",
-          "群友日常|45|今天,日常,闲聊,好累,开心",
-          "图片分享|50|图,图片,表情包,截图",
-          "深夜闲聊|35|深夜,熬夜,晚安"
-        ]
-      },
-      {
-        "__template_key": "group",
-        "group_id": "123456786",
-        "name": "示例群 D",
-        "enabled": true,
-        "topics": [
-          "图片与斗图|55|图,图片,斗图,晒图,表情包",
-          "深夜与晚安|50|深夜,熬夜,晚安,睡不着",
-          "群友打闹|50|打闹,抱抱,摸头,玩笑,打招呼",
-          "B站与视频|45|B站,视频,链接,UP,切片",
-          "游戏与MC|45|游戏,MC,Minecraft,空气制黄金",
-          "穿搭与日常|40|穿搭,衣服,作业,学校,吉他,画画",
-          "新人欢迎|35|新人,欢迎,入群,自我介绍"
-        ]
-      }
-    ],
-    "hint": "每个群一个方案；未写方案的群不使用群话题层，只走人格兴趣层。；行尾加 |被动 表示只作为群聊背景，不参与主动触发",
+    "default": [],
+    "hint": "每个群一个方案；默认留空。未配置的群只走人格兴趣层；行尾加 |被动 表示只作为群聊背景",
     "templates": {
       "group": {
         "name": "群话题方案",
@@ -496,13 +359,13 @@
   "embedding_provider_id": {
     "description": "【预筛】Embedding Provider ID",
     "type": "string",
-    "default": "dashscope_embedding",
-    "hint": "AstrBot 中已配置的 embedding 提供商 ID"
+    "default": "",
+    "hint": "AstrBot 中已配置的 embedding 提供商 ID；留空则跳过向量预筛"
   },
   "rerank_provider_id": {
     "description": "【预筛】Rerank Provider ID",
     "type": "string",
-    "default": "bailian_rerank",
+    "default": "",
     "hint": "边界分数时用于二次排序；留空跳过 rerank"
   },
   "embedding_threshold": {
@@ -595,9 +458,9 @@
         "id": "is_persona_fit",
         "enabled": true,
         "type": "noul",
-        "instructions": "目标消息是否符合机器人的全局人格兴趣？",
-        "true_criteria": "话题落在全局人格兴趣中，例如解题、吃、鲸鱼/摸鱼、被夸、情绪陪伴，接话会自然有趣",
-        "false_criteria": "话题与人格兴趣无关，接话会显得突兀",
+        "instructions": "目标消息是否符合机器人配置的全局人格兴趣？",
+        "true_criteria": "话题落在配置的兴趣方向内，接话会自然有趣",
+        "false_criteria": "话题与配置的兴趣方向无关，接话会显得突兀",
         "score_levels": []
       },
       {
@@ -605,9 +468,9 @@
         "id": "is_group_topic_fit",
         "enabled": true,
         "type": "noul",
-        "instructions": "目标消息是否符合当前群自己的话题画像？",
-        "true_criteria": "话题落在当前群配置的话题方向中，例如游戏、AI/插件、B站、玩梗、群友日常",
-        "false_criteria": "与当前群话题画像无关；不要用其他群的话题来判断",
+        "instructions": "目标消息是否符合当前群配置的话题画像？",
+        "true_criteria": "话题落在当前群配置的话题方向内",
+        "false_criteria": "与当前群配置的话题画像无关；不要用其他群的话题来判断",
         "score_levels": []
       },
       {
@@ -729,7 +592,7 @@
     "description": "【发送门控】启用真实窗口发送",
     "type": "bool",
     "default": false,
-    "hint": "开启前必须停用旧 debounce；当前覆盖普通聊天/私聊/主动回复/poke/群消息跟进"
+    "hint": "开启前请确认没有其它发送门控插件同时停止请求；覆盖普通聊天/私聊/主动回复/poke/群消息跟进"
   },
   "send_gate_enforce_groups": {
     "description": "【发送门控】真实窗口生效群",
@@ -761,13 +624,25 @@
     "description": "【发送门控】真实窗口总等待上限（秒）",
     "type": "int",
     "default": 20,
-    "hint": "从 root 到达开始计算的总等待上限，与 max_window 取更小值"
+    "hint": "从 root 到达开始的等待上限；主动候选的决策宽限另计"
   },
   "send_gate_max_window_seconds": {
     "description": "【发送门控】窗口硬上限（秒）",
     "type": "int",
     "default": 20,
-    "hint": "lane 超过该时间后不再合并；真实等待还受 max_wait 限制"
+    "hint": "lane 合并/等待的硬上限；主动候选的决策宽限另计"
+  },
+  "send_gate_late_decision_grace_seconds": {
+    "description": "【发送门控】主动决策宽限（秒）",
+    "type": "int",
+    "default": 8,
+    "hint": "等待窗口结束后，主动决策最多额外获得的时间；root 晚到窗口时也按此宽限调用 Jev。仍失败则拦截候选并恢复冷却，绝不无决策放行"
+  },
+  "send_gate_candidate_pending_timeout_seconds": {
+    "description": "【发送门控】主动候选待处理超时（秒）",
+    "type": "int",
+    "default": 60,
+    "hint": "候选已预占冷却但请求长时间未进入 on_llm_request 时，超时后恢复冷却；默认 60 秒，需覆盖正常排队延迟"
   },
   "send_gate_cleanup_seconds": {
     "description": "【发送门控】lane 清理时间（秒）",
@@ -785,7 +660,19 @@
     "description": "【发送门控】ONNX 模型目录",
     "type": "string",
     "default": "",
-    "hint": "留空使用本插件 data/plugin_data/astrbot_plugin_attention_gate/models/<type>，旧 debounce 目录仅作兼容回退"
+    "hint": "留空使用 data/plugin_data/astrbot_plugin_attention_gate/models/<type>；模型来源见 README，插件不会读取其它插件目录"
+  },
+  "send_gate_onnx_auto_download": {
+    "description": "【发送门控】自动下载 ONNX 模型",
+    "type": "bool",
+    "default": true,
+    "hint": "模型缺失时从 ModelScope 下载到本插件 data 目录；仅对默认路径生效"
+  },
+  "send_gate_onnx_download_timeout_seconds": {
+    "description": "【发送门控】ONNX 下载超时（秒）",
+    "type": "int",
+    "default": 120,
+    "hint": "单个文件下载的 socket 超时；normal 模型约 154MB，网络慢时调大"
   },
   "send_gate_onnx_model_type": {
     "description": "【发送门控】ONNX 模型类型",

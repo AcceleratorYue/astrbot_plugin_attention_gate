@@ -6,6 +6,7 @@ import asyncio
 import json
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,16 +14,20 @@ from types import SimpleNamespace
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-import main as plugin_main  # noqa: E402  (register hooks)
 from astrbot.core.star.star_handler import (  # noqa: E402
     EventType,
     star_handlers_registry,
 )
+
+import main as plugin_main  # noqa: E402  (register hooks)
 from send_gate import SendGateObserver, classify_request  # noqa: E402
 
 
 class FakeLogger:
     def debug(self, *args, **kwargs):
+        pass
+
+    def info(self, *args, **kwargs):
         pass
 
     def warning(self, *args, **kwargs):
@@ -53,9 +58,7 @@ class FakeEvent:
         self._private = private
         self._extras = extras or {}
         self.unified_msg_origin = (
-            f"test:PrivateMessage:{sender}"
-            if private
-            else f"test:GroupMessage:{group}"
+            f"test:PrivateMessage:{sender}" if private else f"test:GroupMessage:{group}"
         )
         self.stopped = False
 
@@ -95,9 +98,7 @@ def run(coro):
 
 class RequestKindTests(unittest.TestCase):
     def test_proactive(self):
-        info = classify_request(
-            FakeEvent(extras={"active_reply_triggered": {"x": 1}})
-        )
+        info = classify_request(FakeEvent(extras={"active_reply_triggered": {"x": 1}}))
         self.assertEqual(info.kind, "proactive")
         self.assertEqual(info.source, "attention_gate")
 
@@ -113,9 +114,7 @@ class RequestKindTests(unittest.TestCase):
 
     def test_chat_and_private(self):
         self.assertEqual(classify_request(FakeEvent()).kind, "chat")
-        self.assertEqual(
-            classify_request(FakeEvent(private=True)).kind, "chat_private"
-        )
+        self.assertEqual(classify_request(FakeEvent(private=True)).kind, "chat_private")
 
     def test_internal(self):
         self.assertEqual(classify_request(None).kind, "internal")
@@ -152,12 +151,30 @@ class SchemaOrderTests(unittest.TestCase):
                 encoding="utf-8"
             )
         )
-        self.assertEqual(len(schema), 78)
+        for key in (
+            "enable",
+            "api_key",
+            "jev_timeout_seconds",
+            "persona",
+            "interest_groups",
+            "group_topic_schemes",
+            "send_gate_enable",
+            "send_gate_onnx_auto_download",
+            "send_gate_late_decision_grace_seconds",
+        ):
+            self.assertIn(key, schema)
         self.assertTrue(schema["enable"]["description"].startswith("【基础】"))
         self.assertTrue(schema["api_key"]["description"].startswith("【Jev】"))
         self.assertTrue(
             schema["send_gate_enable"]["description"].startswith("【发送门控】")
         )
+        # 默认配置不得再携带作者的个人人格、兴趣词或示例群号。
+        raw = json.dumps(schema, ensure_ascii=False)
+        self.assertNotIn("鲸鲸", raw)
+        self.assertEqual(schema["bot_names"]["default"], [])
+        self.assertEqual(schema["interest_groups"]["default"], [])
+        self.assertEqual(schema["group_topic_schemes"]["default"], [])
+        self.assertIs(schema["api_key"].get("secret"), True)
 
 
 class JevStateLimitTests(unittest.TestCase):
@@ -268,16 +285,17 @@ class DryRunObserverTests(unittest.TestCase):
 
     def test_enforce_completeness_callback(self):
         calls = []
-        async def completeness(text):
+
+        async def completeness(text, timeout=None):
             calls.append(text)
             return 0.0
+
         observer = SendGateObserver(
             config=FakeConfig(
                 {
                     "send_gate_enable": True,
-                    "send_gate_dry_run": True,
                     "send_gate_enforce": True,
-                "send_gate_dry_run": False,
+                    "send_gate_dry_run": False,
                     "send_gate_enforce_groups": [],
                     "send_gate_enforce_private": False,
                     "send_gate_min_wait_seconds": 0,
@@ -298,15 +316,15 @@ class DryRunObserverTests(unittest.TestCase):
         self.assertEqual(calls, ["没说完"])
 
     def test_revalidate_drop_blocks_release(self):
-        async def revalidate(root_text, full_text):
+        async def revalidate(root_text, full_text, timeout=None):
             return False
+
         observer = SendGateObserver(
             config=FakeConfig(
                 {
                     "send_gate_enable": True,
-                    "send_gate_dry_run": True,
                     "send_gate_enforce": True,
-                "send_gate_dry_run": False,
+                    "send_gate_dry_run": False,
                     "send_gate_enforce_groups": [],
                     "send_gate_enforce_private": False,
                     "send_gate_min_wait_seconds": 0,
@@ -353,8 +371,11 @@ class DryRunObserverTests(unittest.TestCase):
 
     def test_drop_buffered_message(self):
         self.config.values.update(
-            {"send_gate_enforce": True,
-                "send_gate_dry_run": False, "send_gate_enforce_groups": []}
+            {
+                "send_gate_enforce": True,
+                "send_gate_dry_run": False,
+                "send_gate_enforce_groups": [],
+            }
         )
         root = FakeEvent(text="第一句", msg_id="d1", group="40004")
         follow = FakeEvent(text="撤回这句", msg_id="d2", group="40004")
@@ -429,6 +450,250 @@ class DryRunObserverTests(unittest.TestCase):
         run(observer.observe_llm(event, req=SimpleNamespace(prompt="x", image_urls=[])))
         self.assertTrue(event.stopped)
 
+    def test_active_candidate_without_root_ticket_fails_closed(self):
+        self.config.values.update(
+            {
+                "send_gate_enforce": True,
+                "send_gate_dry_run": False,
+                "send_gate_min_wait_seconds": 0,
+                "send_gate_max_window_seconds": 1,
+            }
+        )
+        dropped = []
+
+        def drop(event):
+            dropped.append(event)
+
+        observer = SendGateObserver(
+            config=self.config,
+            data_dir_getter=lambda: Path(self.tmp.name),
+            logger=FakeLogger(),
+            candidate_dropped=drop,
+        )
+        event = FakeEvent(
+            text="候选",
+            msg_id="c-no-token",
+            extras={
+                "active_reply_triggered": {},
+                "send_gate_active_candidate": {
+                    "group_id": "10001",
+                    "message_id": "c-no-token",
+                    "cooldown_prev": 0,
+                },
+            },
+        )
+        req = SimpleNamespace(prompt="候选", image_urls=[])
+        run(observer.observe_llm(event, req))
+        self.assertTrue(event.stopped)
+        self.assertEqual(dropped, [event])
+        actions = [r["action"] for r in self._records()]
+        self.assertIn("candidate_unmanaged_stop", actions)
+        self.assertNotIn("real_release_unmanaged", actions)
+
+    def test_late_active_candidate_recovers_lane_and_calls_judge(self):
+        self.config.values.update(
+            {
+                "send_gate_enforce": True,
+                "send_gate_dry_run": False,
+                "send_gate_min_wait_seconds": 0,
+                "send_gate_max_wait_seconds": 1,
+                "send_gate_max_window_seconds": 1,
+                "send_gate_late_decision_grace_seconds": 1,
+            }
+        )
+        seen = []
+
+        async def judge(event, req, lane):
+            seen.append(1)
+            return True
+
+        observer = SendGateObserver(
+            config=self.config,
+            data_dir_getter=lambda: Path(self.tmp.name),
+            logger=FakeLogger(),
+            active_judge=judge,
+        )
+        event = FakeEvent(
+            text="候选",
+            msg_id="late-candidate",
+            group="60006",
+            extras={
+                "active_reply_triggered": {},
+                "send_gate_active_candidate": {
+                    "group_id": "60006",
+                    "message_id": "late-candidate",
+                    "root_text": "候选",
+                    "created_at": time.time() - 30,
+                    "cooldown_prev": 0,
+                },
+            },
+        )
+        req = SimpleNamespace(prompt="候选", image_urls=[])
+        run(observer.observe_waiting(event))
+        for lane in observer._lanes.values():
+            lane.first_at -= 30
+            lane.last_at -= 30
+        ticket = event.get_extra("_send_gate_root_ticket")
+        ticket["first_at"] -= 30
+        ticket["last_at"] -= 30
+        run(observer.observe_llm(event, req))
+        self.assertEqual(seen, [1])
+        self.assertFalse(event.stopped)
+        actions = [r["action"] for r in self._records()]
+        self.assertIn("late_root_recovered", actions)
+        self.assertIn("real_release", actions)
+        self.assertNotIn("real_release_unmanaged", actions)
+
+    def test_late_normal_root_recovers_lane_and_merges_followup(self):
+        self.config.values.update(
+            {
+                "send_gate_enforce": True,
+                "send_gate_dry_run": False,
+                "send_gate_min_wait_seconds": 0,
+                "send_gate_max_wait_seconds": 1,
+                "send_gate_max_window_seconds": 1,
+            }
+        )
+        root = FakeEvent(text="第一句", msg_id="late-root", group="60007")
+        follow = FakeEvent(text="补充一句", msg_id="late-follow", group="60007")
+        req = SimpleNamespace(prompt="第一句", image_urls=[])
+        run(self.observer.observe_group_message(root, accept=lambda e: True))
+        run(self.observer.observe_waiting(root))
+        for lane in self.observer._lanes.values():
+            lane.first_at -= 30
+            lane.last_at -= 30
+        ticket = root.get_extra("_send_gate_root_ticket")
+        ticket["first_at"] -= 30
+        ticket["last_at"] -= 30
+        run(self.observer.observe_group_message(follow, accept=lambda e: True))
+        run(self.observer.observe_llm(root, req))
+        self.assertIn("补充一句", req.prompt)
+        self.assertFalse(root.stopped)
+        actions = [r["action"] for r in self._records()]
+        self.assertIn("late_root_recovered", actions)
+        self.assertIn("real_release", actions)
+
+    def test_active_candidate_cancel_restores_cooldown(self):
+        self.config.values.update(
+            {
+                "send_gate_enforce": True,
+                "send_gate_dry_run": False,
+                "send_gate_min_wait_seconds": 0,
+                "send_gate_max_wait_seconds": 1,
+                "send_gate_max_window_seconds": 1,
+                "send_gate_late_decision_grace_seconds": 1,
+            }
+        )
+        dropped = []
+
+        def drop(event):
+            dropped.append(event)
+
+        async def judge(event, req, lane):
+            raise asyncio.CancelledError
+
+        observer = SendGateObserver(
+            config=self.config,
+            data_dir_getter=lambda: Path(self.tmp.name),
+            logger=FakeLogger(),
+            active_judge=judge,
+            candidate_dropped=drop,
+        )
+        event = FakeEvent(
+            text="候选",
+            msg_id="cancel-candidate",
+            group="60008",
+            extras={
+                "active_reply_triggered": {},
+                "send_gate_active_candidate": {
+                    "group_id": "60008",
+                    "message_id": "cancel-candidate",
+                    "root_text": "候选",
+                    "created_at": time.time() - 30,
+                    "cooldown_prev": 0,
+                },
+            },
+        )
+        req = SimpleNamespace(prompt="候选", image_urls=[])
+        run(observer.observe_waiting(event))
+        for lane in observer._lanes.values():
+            lane.first_at -= 30
+            lane.last_at -= 30
+        with self.assertRaises(asyncio.CancelledError):
+            run(observer.observe_llm(event, req))
+        self.assertEqual(dropped, [event])
+
+    def test_followup_duplicate_does_not_rollback_cooldown(self):
+        self.config.values.update(
+            {
+                "send_gate_enforce": True,
+                "send_gate_dry_run": False,
+                "send_gate_min_wait_seconds": 0,
+                "send_gate_max_window_seconds": 10,
+            }
+        )
+        dropped = []
+
+        def drop(event):
+            dropped.append(event)
+
+        observer = SendGateObserver(
+            config=self.config,
+            data_dir_getter=lambda: Path(self.tmp.name),
+            logger=FakeLogger(),
+            candidate_dropped=drop,
+        )
+        root = FakeEvent(text="root", msg_id="follow-root", group="60010")
+        followup = FakeEvent(
+            text="follow-up",
+            msg_id="follow-followup",
+            group="60010",
+            extras={"_follow_up_captured": {"x": 1}},
+        )
+        run(observer.observe_waiting(root))
+        run(observer.observe_waiting(followup))
+        self.assertTrue(followup.stopped)
+        self.assertEqual(dropped, [])
+
+    def test_duplicate_candidate_in_active_lane_restores_cooldown(self):
+        self.config.values.update(
+            {
+                "send_gate_enforce": True,
+                "send_gate_dry_run": False,
+                "send_gate_min_wait_seconds": 0,
+                "send_gate_max_window_seconds": 10,
+            }
+        )
+        dropped = []
+
+        def drop(event):
+            dropped.append(event)
+
+        observer = SendGateObserver(
+            config=self.config,
+            data_dir_getter=lambda: Path(self.tmp.name),
+            logger=FakeLogger(),
+            candidate_dropped=drop,
+        )
+        root = FakeEvent(text="root", msg_id="dup-root", group="60009")
+        candidate = FakeEvent(
+            text="候选",
+            msg_id="dup-candidate",
+            group="60009",
+            extras={
+                "active_reply_triggered": {},
+                "send_gate_active_candidate": {
+                    "group_id": "60009",
+                    "message_id": "dup-candidate",
+                    "cooldown_prev": 0,
+                },
+            },
+        )
+        run(observer.observe_waiting(root))
+        run(observer.observe_waiting(candidate))
+        self.assertTrue(candidate.stopped)
+        self.assertEqual(dropped, [candidate])
+
     def test_duplicate_proactive_in_active_lane_is_stopped(self):
         self.config.values.update(
             {
@@ -455,7 +720,9 @@ class DryRunObserverTests(unittest.TestCase):
         first = FakeEvent(text="第一句", msg_id="m1")
         second = FakeEvent(text="释放后的新消息", msg_id="m2")
         run(self.observer.observe_waiting(first))
-        run(self.observer.observe_llm(first, SimpleNamespace(prompt="p", image_urls=[])))
+        run(
+            self.observer.observe_llm(first, SimpleNamespace(prompt="p", image_urls=[]))
+        )
         run(self.observer.observe_waiting(second))
         actions = [r["action"] for r in self._records()]
         self.assertEqual(actions, ["would_root", "would_release", "would_root"])

@@ -1,17 +1,17 @@
-"""注意力门控主动回复插件。
+"""AstrBot 消息发送门控插件。
 
-只做“观察 / 判断 / 触发”，不直接发送消息，也不生成回复正文。
+插件只做“观察 / 判断 / 等待 / 合并”，不生成回复正文，也不直接发送消息。
 
 流程：
-群消息 -> 硬过滤 -> 缓冲区 -> Jev 判断 -> act 时 yield request_llm()
-主线的 persona / 历史 / 分段 / 引用 / reply_budget / suanle 等继续生效。
+群聊或私聊消息 -> 主动判断 -> 候选请求进入发送窗口 -> 等待用户说完
+-> 合并同一用户的补充内容 -> 必要时重新判断 -> 释放原请求给主模型
 
 关键约束：
-- 只做群聊；
-- 单群每小时上限 + 主动冷却；
-- 冷却期间继续缓冲，冷却结束后的下一条消息再判断；
-- Jev 不可用直接 pass，不降级到其他模型；
-- 主动回复时通过 attention_quote_target 让智能引用插件引用目标消息。
+- 主动回复与普通聊天、私聊、poke 共用发送窗口；
+- 主动回复只有 Jev 判定 act 后才允许进入主模型；
+- 冷却、小时额度、密度等状态在判断失败、超时或取消时回滚；
+- 不依赖其它发送门控插件的目录、状态或模型；
+- 主动回复通过 attention_quote_target 引用目标消息。
 """
 
 from __future__ import annotations
@@ -25,6 +25,7 @@ import re
 import time
 import urllib.error
 import urllib.request
+import uuid
 from collections import OrderedDict, deque
 from collections.abc import AsyncGenerator
 from pathlib import Path
@@ -44,126 +45,28 @@ except ImportError:  # 兼容测试直接 import main 的场景
     from send_gate.onnx_rhythm import OnnxRhythm
 
 PLUGIN_NAME = "astrbot_plugin_attention_gate"
-VERSION = "0.9.3"
+VERSION = "0.9.4"
 LOG = f"[{PLUGIN_NAME}]"
 
-DEFAULT_JEV_URL = "https://tokenrhythm.studio/v1/decision"
-DEFAULT_JEV_MODEL = "NeoHorse-Jev-4B"
+DEFAULT_JEV_URL = "https://api.typesafe.ai/v1"
+DEFAULT_JEV_MODEL = "jev-latest"
 SYSTEMONE_SUFFIX = "/v1/systemone"
 TRIGGER_QUOTE_EXTRA = "attention_quote_target"
 TRIGGER_MARK_EXTRA = "attention_gate_triggered"
 ACTIVE_CANDIDATE_EXTRA = "send_gate_active_candidate"
 HOUR_SECONDS = 3600.0
 BUFFER_MAX = 100
+DEFAULT_BOT_NAME = "机器人"
 
 DEFAULT_PERSONA = (
-    "我是鲸鲸，一只鲸鱼娘。性格活泼、嘴硬心软、会傲娇，但很少真的生气；"
-    "我说话短，先给情绪反应，再给内容；我不会主动刷屏，也不会为了参与硬找话说。"
+    "群聊助手，语气自然、简洁、友好；先理解上下文，再决定是否参与；"
+    "不主动刷屏，也不为了参与硬找话说。"
 )
 
-DEFAULT_GLOBAL_INTERESTS = [
-    {
-        "name": "解题与知识问答",
-        "weight": 85,
-        "keywords": ["题", "解题", "为什么", "原理", "算法", "答案"],
-    },
-    {
-        "name": "吃与零食",
-        "weight": 75,
-        "keywords": ["吃", "白饭", "零食", "饭", "好吃", "奶茶"],
-    },
-    {
-        "name": "鲸鱼与摸鱼",
-        "weight": 90,
-        "keywords": ["鲸", "鲸鱼", "大肥鱼", "小肥鱼", "摸鱼", "海"],
-    },
-    {
-        "name": "被夸与互动",
-        "weight": 60,
-        "keywords": ["可爱", "厉害", "夸", "喜欢你", "抱抱"],
-    },
-    {
-        "name": "情绪陪伴",
-        "weight": 55,
-        "keywords": ["累", "难过", "烦", "委屈", "安慰", "开心"],
-    },
-]
-
-DEFAULT_GROUP_TOPIC_SCHEMES = [
-    {
-        "__template_key": "group",
-        "group_id": "123456789",
-        "name": "示例群 A",
-        "enabled": True,
-        "topics": [
-            "游戏与联机|85|游戏,十点半,Minecraft,MC,VRChat,战雷,开黑",
-            "AI/插件/技术|75|模型,token,插件,提示词,部署,代码,桌宠",
-            "B站与视频|70|B站,视频,UP,评论区,弹幕,切片",
-            "玩梗与表情包|60|梗,表情包,图,斗嘴,吐槽,复读",
-            "群友日常|45|今天,上班,下班,睡觉,好累,刚刚",
-        ],
-    },
-    {
-        "__template_key": "group",
-        "group_id": "123456788",
-        "name": "示例群 B",
-        "enabled": True,
-        "topics": [
-            "玩梗与复读|80|梗,复读,哈基米,玩梗,转人工",
-            "脑筋急转弯与谜题|85|脑筋急转弯,谜题,为什么,答案,切比雪夫",
-            "摸头与互动|70|摸头,抱抱,贴贴,打闹,打招呼",
-            "角色扮演与图灵测试|65|角色扮演,图灵测试,扮演,AI,机器人",
-            "图片与表情包|60|图,图片,表情包,截图,画图",
-            "音乐与视频|55|歌,歌曲,音乐,视频,切片",
-            "深夜闲聊|40|深夜,睡不着,熬夜,晚安",
-        ],
-    },
-    {
-        "__template_key": "group",
-        "group_id": "123456787",
-        "name": "示例群 C",
-        "enabled": True,
-        "topics": [
-            "蔚蓝档案|90|蔚蓝档案,BA,老师,学生,阿罗娜",
-            "总力战与攻略|85|总力战,凹分,凹轴,攻略,配队,轴",
-            "抽卡与养成|80|抽卡,十连,出货,井,养成,角色",
-            "签到与今日运势|55|签到,运势,今日运势,抽签",
-            "群友日常|45|今天,日常,闲聊,好累,开心",
-            "图片分享|50|图,图片,表情包,截图",
-            "深夜闲聊|35|深夜,熬夜,晚安",
-        ],
-    },
-    {
-        "__template_key": "group",
-        "group_id": "123456786",
-        "name": "示例群 D",
-        "enabled": True,
-        "topics": [
-            "今日运势与签到|60|签到,运势,今日运势,金币",
-            "图片与斗图|55|图,图片,斗图,晒图,表情包",
-            "深夜与晚安|50|深夜,熬夜,晚安,睡不着",
-            "群友打闹|50|打闹,抱抱,摸头,玩笑,打招呼",
-            "B站与视频|45|B站,视频,链接,UP,切片",
-            "游戏与MC|45|游戏,MC,Minecraft,空气制黄金",
-            "穿搭与日常|40|穿搭,衣服,作业,学校,吉他,画画",
-            "新人欢迎|35|新人,欢迎,入群,自我介绍",
-        ],
-    },
-]
-
-DEFAULT_IMPULSE_SETTINGS = {
-    "impulse_threshold": 0.72,
-    "impulse_value_threshold": 1.20,
-    "impulse_risk_max": 0.30,
-}
-
-DEFAULT_PREFILTER_SETTINGS = {
-    "embedding_provider_id": "dashscope_embedding",
-    "rerank_provider_id": "bailian_rerank",
-    "embedding_threshold": 0.42,
-    "embedding_low_threshold": 0.30,
-    "rerank_threshold": 0.30,
-}
+# 不在代码里内置任何个人设定。兴趣和群话题由部署者在配置中填写；
+# 未配置时只使用人格判断，不伪造兴趣匹配。
+DEFAULT_GLOBAL_INTERESTS: list[dict[str, Any]] = []
+DEFAULT_GROUP_TOPIC_SCHEMES: list[dict[str, Any]] = []
 
 _IMPULSE_CUE_RE = re.compile(
     r"[?？!！]|哈哈|笑死|离谱|救命|卧槽|绝了|服了|真的假的|无语|"
@@ -185,6 +88,7 @@ def cosine_similarity(a: list[float], b: list[float]) -> float:
 
 def impulse_cue(text: str) -> bool:
     return bool(_IMPULSE_CUE_RE.search(text or ""))
+
 
 DEFAULT_QUESTIONS: dict[str, Any] = {
     "is_mentioned": {
@@ -229,17 +133,18 @@ DEFAULT_QUESTIONS: dict[str, Any] = {
     },
     "is_persona_fit": {
         "type": "noul",
-        "instructions": "目标消息是否符合机器人的全局人格兴趣？",        "criteria": {
-            "true": "话题落在全局人格兴趣中，例如解题、吃、鲸鱼/摸鱼、被夸、情绪陪伴，接话会自然有趣",
-            "false": "话题与人格兴趣无关，接话会显得突兀",
+        "instructions": "目标消息是否符合机器人配置的全局人格兴趣？",
+        "criteria": {
+            "true": "话题落在配置的兴趣方向内，接话会自然有趣",
+            "false": "话题与配置的兴趣方向无关，接话会显得突兀",
         },
     },
     "is_group_topic_fit": {
         "type": "noul",
-        "instructions": "目标消息是否符合当前群自己的话题画像？",
+        "instructions": "目标消息是否符合当前群配置的话题画像？",
         "criteria": {
-            "true": "话题落在当前群配置的话题方向中，例如游戏、AI/插件、B站、玩梗、群友日常",
-            "false": "与当前群话题画像无关；不要用其他群的话题来判断",
+            "true": "话题落在当前群配置的话题方向内",
+            "false": "与当前群配置的话题画像无关；不要用其他群的话题来判断",
         },
     },
     "is_good_moment": {
@@ -352,7 +257,9 @@ def normalize_interests(value: Any) -> list[dict[str, Any]]:
         if isinstance(aliases_raw, dict):
             for base, extra in aliases_raw.items():
                 if isinstance(extra, list):
-                    aliases[str(base)] = [str(x).strip() for x in extra if str(x).strip()]
+                    aliases[str(base)] = [
+                        str(x).strip() for x in extra if str(x).strip()
+                    ]
         result.append(
             {
                 "name": name,
@@ -579,11 +486,17 @@ def decide_answers(
     ):
         return True, f"impulse({impulse:.2f}, value={value:.2f})"
 
-    interest_ok = persona >= th["is_persona_fit"] or group_topic >= th["is_group_topic_fit"]
+    interest_ok = (
+        persona >= th["is_persona_fit"] or group_topic >= th["is_group_topic_fit"]
+    )
     if not interest_ok and mentioned < th["is_mentioned"]:
         return False, "interest_low"
 
-    if continuation and continuation_p >= th["is_continuation"] and value >= th["continuation_reply_value"]:
+    if (
+        continuation
+        and continuation_p >= th["is_continuation"]
+        and value >= th["continuation_reply_value"]
+    ):
         return True, f"continuation(value={value:.2f}, p={continuation_p:.2f})"
     if value >= th["reply_value"]:
         return True, f"value({value:.2f})"
@@ -626,10 +539,12 @@ class AttentionGatePlugin(Star):
                 config_getter=self._cfg,
                 data_dir_getter=self._data_dir_path,
                 logger=logger,
+                user_agent=f"astrbot-plugin-attention-gate/{VERSION}",
             ),
             completeness_getter=self._send_gate_completeness,
             revalidate_getter=self._send_gate_revalidate_proactive,
             active_judge=self._send_gate_active_judge,
+            candidate_dropped=self._restore_active_candidate_cooldown,
         )
         self._msg_embedding_cache: OrderedDict[str, list[float]] = OrderedDict()
         self._profile_embedding_cache: dict[str, tuple[str, list[list[float]]]] = {}
@@ -642,6 +557,29 @@ class AttentionGatePlugin(Star):
             str(self._cfg("model", DEFAULT_JEV_MODEL) or DEFAULT_JEV_MODEL),
             self._endpoint_url(),
         )
+
+    async def initialize(self) -> None:
+        """插件激活时预热 ONNX；下载/加载放在后台，不阻塞 AstrBot 启动。"""
+        starter = getattr(self._send_gate, "start_onnx_warmup", None)
+        if callable(starter):
+            task = starter()
+            if task is not None:
+                self._onnx_warmup_task = task
+
+    async def terminate(self) -> None:
+        """插件停用/重载时取消后台预热任务。"""
+        canceller = getattr(self._send_gate, "cancel_onnx_warmup", None)
+        if callable(canceller):
+            canceller()
+        task = getattr(self, "_onnx_warmup_task", None)
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("%s 取消 ONNX 预热失败: %s", LOG, exc)
 
     # ------------------------------------------------------------------
     # 配置
@@ -669,7 +607,7 @@ class AttentionGatePlugin(Star):
     def _endpoint_url(self) -> str:
         """接受完整 SystemOne/Decision URL，也接受服务根地址。
 
-        NeoHorse-Jev-4B 同时提供：
+        Jev 服务通常同时提供：
         - /v1/systemone
         - /v1/decision
 
@@ -751,9 +689,7 @@ class AttentionGatePlugin(Star):
         if not isinstance(profile, dict):
             return {}
         topics = normalize_interests(profile.get("topics", []))
-        return {
-            "topics": [x for x in topics if x.get("proactive", True)]
-        }
+        return {"topics": [x for x in topics if x.get("proactive", True)]}
 
     def _data_dir_path(self) -> Path:
         if self._data_dir is None:
@@ -793,6 +729,7 @@ class AttentionGatePlugin(Star):
                 "user_dispatches": {},
                 "unanswered": deque(maxlen=30),
                 "last_bot_reply": "",
+                "active_candidate_pending": None,
             }
             self._states[group_id] = state
         return state
@@ -930,7 +867,10 @@ class AttentionGatePlugin(Star):
             for comp in event.get_messages() or []:
                 if isinstance(comp, At) and str(comp.qq) == self_id:
                     return True
-                if isinstance(comp, Reply) and str(getattr(comp, "sender_id", "")) == self_id:
+                if (
+                    isinstance(comp, Reply)
+                    and str(getattr(comp, "sender_id", "")) == self_id
+                ):
                     return True
         except Exception:
             return False
@@ -942,7 +882,10 @@ class AttentionGatePlugin(Star):
             for comp in event.get_messages() or []:
                 if isinstance(comp, At) and str(comp.qq) != self_id:
                     return True
-                if isinstance(comp, Reply) and str(getattr(comp, "sender_id", "")) != self_id:
+                if (
+                    isinstance(comp, Reply)
+                    and str(getattr(comp, "sender_id", "")) != self_id
+                ):
                     return True
         except Exception:
             return False
@@ -964,9 +907,7 @@ class AttentionGatePlugin(Star):
 
     def _fit_jev_state(self, state: dict[str, Any]) -> dict[str, Any]:
         """限制 Jev 输入体积，避免上游因上下文过长返回 422。"""
-        max_chars = _as_int(
-            self._cfg("jev_max_state_chars", 12000), 12000, 2000
-        )
+        max_chars = _as_int(self._cfg("jev_max_state_chars", 12000), 12000, 2000)
         target = state.get("target_message") or {}
 
         def size() -> int:
@@ -983,9 +924,7 @@ class AttentionGatePlugin(Star):
         if size() > max_chars:
             # 最后手段：按结构逐级截短，并在每轮后重新计算体积。
             conversation = state.get("recent_conversation") or []
-            state["recent_conversation"] = [
-                str(line)[:160] for line in conversation
-            ]
+            state["recent_conversation"] = [str(line)[:160] for line in conversation]
             for item in state.get("recent_unanswered", []):
                 if isinstance(item, dict):
                     item["content"] = str(item.get("content") or "")[:120]
@@ -1110,17 +1049,25 @@ class AttentionGatePlugin(Star):
             raw.pop("is_group_topic_fit", None)
         return json.loads(json.dumps(raw).replace("{self_id}", self_id))
 
-    def _call_jev_sync(self, state: dict[str, Any], questions: dict[str, Any]) -> dict[str, Any]:
+    def _call_jev_sync(
+        self,
+        state: dict[str, Any],
+        questions: dict[str, Any],
+        timeout: float = 30.0,
+    ) -> dict[str, Any]:
         url = self._endpoint_url()
+        if not url:
+            raise RuntimeError("Jev 服务地址为空")
         api_key = str(self._cfg("api_key", "") or "").strip()
-        # NeoHorse-Jev-4B 的 SystemOne 接口以文本 state 为主；
-        # TypeSafe 也接受文本。默认转成 JSON 文本，兼容性最好。
+        # SystemOne/Decision 接口均接受文本 state；默认转成 JSON 文本兼容性最好。
         state_payload: Any = state
         if self._bool("state_as_text", True):
             state_payload = json.dumps(state, ensure_ascii=False, indent=2)
         body = json.dumps(
             {
-                "model": str(self._cfg("model", DEFAULT_JEV_MODEL) or DEFAULT_JEV_MODEL),
+                "model": str(
+                    self._cfg("model", DEFAULT_JEV_MODEL) or DEFAULT_JEV_MODEL
+                ),
                 "state": state_payload,
                 "questions": questions,
             },
@@ -1128,13 +1075,17 @@ class AttentionGatePlugin(Star):
         ).encode("utf-8")
         headers = {
             "Content-Type": "application/json",
-            "User-Agent": "astrbot-plugin-attention-gate/0.1.0",
+            "User-Agent": f"astrbot-plugin-attention-gate/{VERSION}",
         }
-        # NeoHorse 本地服务默认无鉴权；只有配置了 key 才发送 Authorization。
+        # 只有配置了 key 才发送 Authorization；自托管服务通常无鉴权。
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         last_error: Exception | None = None
+        deadline = time.monotonic() + max(1.0, float(timeout))
         for attempt in range(3):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0.2:
+                raise TimeoutError("Jev 请求超时")
             request = urllib.request.Request(
                 url,
                 data=body,
@@ -1142,7 +1093,9 @@ class AttentionGatePlugin(Star):
                 method="POST",
             )
             try:
-                with urllib.request.urlopen(request, timeout=30) as response:
+                with urllib.request.urlopen(
+                    request, timeout=max(1.0, remaining)
+                ) as response:
                     return json.loads(response.read().decode("utf-8"))
             except urllib.error.HTTPError as exc:
                 error_body = ""
@@ -1153,10 +1106,13 @@ class AttentionGatePlugin(Star):
                 last_error = RuntimeError(
                     f"HTTP {exc.code}: {error_body or exc.reason}"
                 )
-                # 平台文档：429 容量限流，502/503/504 上游或依赖故障可重试；
+                # 429 容量限流，502/503/504/529 上游或依赖故障可重试；
                 # 401/403/413/422 等参数/权限错误不重试。
                 if exc.code in (429, 502, 503, 504, 529):
-                    time.sleep(1.5 * (attempt + 1))
+                    retry_in = 1.5 * (attempt + 1)
+                    if deadline - time.monotonic() <= retry_in:
+                        raise last_error from exc
+                    time.sleep(retry_in)
                     continue
                 raise last_error from exc
             except (urllib.error.URLError, TimeoutError) as exc:
@@ -1165,11 +1121,21 @@ class AttentionGatePlugin(Star):
                 raise
         raise RuntimeError(f"Jev 请求失败: {last_error}")
 
-    async def _call_jev(self, state: dict[str, Any], questions: dict[str, Any]) -> dict[str, Any]:
-        timeout = _as_float(self._cfg("jev_timeout_seconds", 25.0), 25.0)
+    async def _call_jev(
+        self,
+        state: dict[str, Any],
+        questions: dict[str, Any],
+        *,
+        timeout: float | None = None,
+    ) -> dict[str, Any]:
+        configured = max(0.2, _as_float(self._cfg("jev_timeout_seconds", 8.0), 8.0))
+        effective = configured
+        if timeout is not None:
+            # 给外层 wait_for 留出清理时间，避免在最后 0.01 秒被取消。
+            effective = min(configured, max(0.2, float(timeout) - 0.05))
         return await asyncio.wait_for(
-            asyncio.to_thread(self._call_jev_sync, state, questions),
-            timeout=max(3.0, timeout),
+            asyncio.to_thread(self._call_jev_sync, state, questions, effective),
+            timeout=max(0.3, effective),
         )
 
     def _profile_docs(self, group_id: str) -> list[str]:
@@ -1197,9 +1163,7 @@ class AttentionGatePlugin(Star):
         return False
 
     def _embedding_provider(self):
-        provider_id = str(
-            self._cfg("embedding_provider_id", "dashscope_embedding") or ""
-        ).strip()
+        provider_id = str(self._cfg("embedding_provider_id", "") or "").strip()
         if not provider_id:
             return None
         provider = self.context.get_provider_by_id(provider_id)
@@ -1244,7 +1208,9 @@ class AttentionGatePlugin(Star):
         # DashScope text-embedding-v4 单批最多 10 条；不同 Provider 也可能有
         # 各自的批大小限制。按配置分批，默认 10，避免 5+7 / 5+8 这类
         # 话题数组合直接触发 400 InvalidParameter。
-        batch_size = max(1, min(10, _as_int(self._cfg("embedding_batch_size", 10), 10, 1)))
+        batch_size = max(
+            1, min(10, _as_int(self._cfg("embedding_batch_size", 10), 10, 1))
+        )
         timeout = float(self._cfg("embedding_timeout_seconds", 8.0) or 8.0)
         vectors: list[list[float]] = []
         try:
@@ -1266,9 +1232,7 @@ class AttentionGatePlugin(Star):
         return vectors
 
     async def _rerank_score(self, text: str, docs: list[str]) -> float | None:
-        provider_id = str(
-            self._cfg("rerank_provider_id", "bailian_rerank") or ""
-        ).strip()
+        provider_id = str(self._cfg("rerank_provider_id", "") or "").strip()
         if not provider_id:
             return None
         provider = self.context.get_provider_by_id(provider_id)
@@ -1353,9 +1317,7 @@ class AttentionGatePlugin(Star):
     ) -> dict[str, float]:
         result = self._thresholds()
         last = _as_float(state.get("last_proactive_at"), 0.0)
-        window = _as_int(
-            self._cfg("post_reply_penalty_seconds", 600), 600, 0
-        )
+        window = _as_int(self._cfg("post_reply_penalty_seconds", 600), 600, 0)
         penalty = _as_float(self._cfg("post_reply_threshold_penalty", 0.2), 0.2)
         if last and window and time.time() - last < window and penalty > 0:
             result["reply_value"] = result.get("reply_value", 1.5) + penalty
@@ -1365,9 +1327,7 @@ class AttentionGatePlugin(Star):
         attention_window = _as_int(
             self._cfg("user_attention_window_seconds", 1800), 1800, 0
         )
-        repeat_penalty = _as_float(
-            self._cfg("user_repeat_penalty", 0.15), 0.15
-        )
+        repeat_penalty = _as_float(self._cfg("user_repeat_penalty", 0.15), 0.15)
         if sender_id and attention_window and repeat_penalty > 0:
             times = state.get("user_dispatches", {}).get(sender_id, ())
             now = time.time()
@@ -1384,6 +1344,8 @@ class AttentionGatePlugin(Star):
         group_id: str,
         state: dict[str, Any],
         target: dict[str, Any],
+        *,
+        timeout: float | None = None,
     ) -> tuple[bool, str, dict[str, Any]]:
         self_id = str(event.get_self_id() or "")
         questions = self._questions(self_id, group_id)
@@ -1394,6 +1356,7 @@ class AttentionGatePlugin(Star):
             response = await self._call_jev(
                 state_view,
                 questions,
+                timeout=timeout,
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("%s Jev 判断失败，直接 pass: %s", LOG, exc)
@@ -1409,9 +1372,7 @@ class AttentionGatePlugin(Star):
         thresholds = (
             self._thresholds()
             if addressed_to_bot
-            else self._thresholds_for_state(
-                state, str(event.get_sender_id() or "")
-            )
+            else self._thresholds_for_state(state, str(event.get_sender_id() or ""))
         )
         act, reason = decide_answers(
             nouls,
@@ -1420,12 +1381,16 @@ class AttentionGatePlugin(Star):
             thresholds,
             addressed_to_bot=addressed_to_bot,
         )
-        return act, reason, {
-            "nouls": nouls,
-            "reply_value": score,
-            "idle": state_view.get("idle_state", {}),
-            "answers": answers,
-        }
+        return (
+            act,
+            reason,
+            {
+                "nouls": nouls,
+                "reply_value": score,
+                "idle": state_view.get("idle_state", {}),
+                "answers": answers,
+            },
+        )
 
     # ------------------------------------------------------------------
     # 触发
@@ -1457,7 +1422,9 @@ class AttentionGatePlugin(Star):
             return False
         # auto: 运行目录中存在 context_aware 时，上下文交给它注入，避免重复。
         try:
-            return (Path(__file__).resolve().parent.parent / "astrbot_plugin_context_aware").is_dir()
+            return (
+                Path(__file__).resolve().parent.parent / "astrbot_plugin_context_aware"
+            ).is_dir()
         except Exception:
             return False
 
@@ -1499,26 +1466,39 @@ class AttentionGatePlugin(Star):
         )
         turn = target.get("turn") or []
         if isinstance(turn, list) and len(turn) > 1:
-            prompt += "目标消息所属的连续发言：\n" + "\n".join(
-                f"- {item.get('time', '')} {item.get('content', '')}"
-                for item in turn
-                if isinstance(item, dict)
-            ) + "\n"
+            prompt += (
+                "目标消息所属的连续发言：\n"
+                + "\n".join(
+                    f"- {item.get('time', '')} {item.get('content', '')}"
+                    for item in turn
+                    if isinstance(item, dict)
+                )
+                + "\n"
+            )
         batch = target.get("batch") or []
         if isinstance(batch, list) and len(batch) > 1:
-            prompt += "等待窗口内同批到达的消息：\n" + "\n".join(
-                f"- {item.get('sender_name', '')}: {item.get('content', '')}"
-                for item in batch
-                if isinstance(item, dict)
-            ) + "\n"
+            prompt += (
+                "等待窗口内同批到达的消息：\n"
+                + "\n".join(
+                    f"- {item.get('sender_name', '')}: {item.get('content', '')}"
+                    for item in batch
+                    if isinstance(item, dict)
+                )
+                + "\n"
+            )
         unanswered = list(state.get("unanswered", ()))[-6:]
         if unanswered:
-            prompt += "近期尚未回复的群聊：\n" + "\n".join(
-                f"- {item.get('sender_name', '')}: {item.get('content', '')}"
-                for item in unanswered
-                if isinstance(item, dict)
-                and str(item.get("message_id") or "") != str(target.get("message_id") or "")
-            ) + "\n"
+            prompt += (
+                "近期尚未回复的群聊：\n"
+                + "\n".join(
+                    f"- {item.get('sender_name', '')}: {item.get('content', '')}"
+                    for item in unanswered
+                    if isinstance(item, dict)
+                    and str(item.get("message_id") or "")
+                    != str(target.get("message_id") or "")
+                )
+                + "\n"
+            )
         prompt += (
             "先读懂这段对话在聊什么，再回应目标的完整意思；"
             "不要只抓某个词做字面反应，也不要接半句或补刀。"
@@ -1538,8 +1518,26 @@ class AttentionGatePlugin(Star):
         )
         return prompt + "不要长篇解释；没有表达欲就调用 keep_silent。"
 
+    def _local_agent_runner(self) -> bool:
+        """只有 local agent runner 会触发 OnWaitingLLMRequest。"""
+        try:
+            config = self.context.get_config()
+            runner = config.get("agent_runner", {}) or {}
+            return str(runner.get("runner_type", "local") or "local") == "local"
+        except Exception:
+            return True
+
     def _defer_active_decision(self) -> bool:
         """send_gate 真实窗口启用时，主动决策推迟到窗口合并之后。"""
+        if not self._local_agent_runner():
+            if not getattr(self, "_warned_nonlocal_agent", False):
+                self._warned_nonlocal_agent = True
+                logger.warning(
+                    "%s 当前 agent_runner 不是 local，send_gate waiting hook 不会触发；"
+                    "主动回复退回非延迟判断，发送门控窗口不生效",
+                    LOG,
+                )
+            return False
         return (
             self._bool("send_gate_enable", False)
             and self._bool("send_gate_enforce", False)
@@ -1554,7 +1552,9 @@ class AttentionGatePlugin(Star):
         groups = {str(x).strip() for x in groups if str(x).strip()}
         return not groups or str(group_id) in groups
 
-    def _find_buffer_record(self, group_id: str, message_id: str) -> dict[str, Any] | None:
+    def _find_buffer_record(
+        self, group_id: str, message_id: str
+    ) -> dict[str, Any] | None:
         target = str(message_id or "")
         if not target:
             return None
@@ -1575,22 +1575,25 @@ class AttentionGatePlugin(Star):
         reason: str,
         prefilter_reason: str,
     ) -> tuple[str, str]:
-        cooldown_seconds = max(
-            0, _as_int(self._cfg("cooldown_seconds", 120), 120, 0)
-        )
-        dispatch_now = time.time()
+        cooldown_seconds = max(0, _as_int(self._cfg("cooldown_seconds", 120), 120, 0))
         sender_id = str(record.get("sender_id") or "")
+        # 先完成可能失败的 provider/prompt 步骤，再一次性写入节奏状态。
+        # 这样 provider 失败时不需要回滚 dispatches/cooldown，避免额度泄漏。
+        provider_id = await self._force_main_chat_provider(event)
+        prompt = self._dispatch_prompt(group_id, state, record, reason)
+        dispatch_now = time.time()
         state["cooldown_until"] = dispatch_now + cooldown_seconds
         state["dispatches"].append(dispatch_now)
-        state["user_dispatches"].setdefault(
-            sender_id, deque(maxlen=20)
-        ).append(dispatch_now)
+        state["user_dispatches"].setdefault(sender_id, deque(maxlen=20)).append(
+            dispatch_now
+        )
         state["last_dispatch_sender"] = sender_id
         state["last_proactive_at"] = dispatch_now
         state["messages_since_proactive"] = 0
         state["last_proactive_got_reply"] = False
         state["awaiting_reply"] = True
         state["last_target_sender"] = sender_id
+        state["active_candidate_pending"] = None
         path = reason.split("(", 1)[0]
         trigger_payload = {
             "plugin": PLUGIN_NAME,
@@ -1602,11 +1605,7 @@ class AttentionGatePlugin(Star):
         event.set_extra(TRIGGER_MARK_EXTRA, trigger_payload)
         event.set_extra("active_reply_triggered", trigger_payload)
         if self._bool("quote_target_enabled", True):
-            event.set_extra(
-                TRIGGER_QUOTE_EXTRA, str(record.get("message_id") or "")
-            )
-        provider_id = await self._force_main_chat_provider(event)
-        prompt = self._dispatch_prompt(group_id, state, record, reason)
+            event.set_extra(TRIGGER_QUOTE_EXTRA, str(record.get("message_id") or ""))
         logger.info(
             "%s 触发主动回复: %s | %s | target=%s",
             LOG,
@@ -1639,9 +1638,9 @@ class AttentionGatePlugin(Star):
             return
         state = self._state(group_id)
         self._note_unanswered(state, record)
-        state["messages_since_proactive"] = _as_int(
-            state.get("messages_since_proactive"), 0, 0
-        ) + 1
+        state["messages_since_proactive"] = (
+            _as_int(state.get("messages_since_proactive"), 0, 0) + 1
+        )
         if state.get("awaiting_reply") and sender_id != self_id:
             state["last_proactive_got_reply"] = True
             state["awaiting_reply"] = False
@@ -1685,6 +1684,7 @@ class AttentionGatePlugin(Star):
                 ][-batch_max:]
 
         now = time.time()
+        self._expire_candidate_pending(state, now)
         if self._in_cooldown(state, now):
             return
         if self._hour_limit_reached(state, now):
@@ -1695,10 +1695,10 @@ class AttentionGatePlugin(Star):
         # 并发消息可能在 Jev 判断期间同时通过上面的检查；先原子占住冷却，
         # 判断为 pass/未发送时再恢复原值，避免同一秒生成多条主动回复。
         cooldown_prev = _as_float(state.get("cooldown_until"), 0.0)
-        cooldown_seconds = max(
-            0, _as_int(self._cfg("cooldown_seconds", 120), 120, 0)
-        )
-        state["cooldown_until"] = now + cooldown_seconds
+        cooldown_seconds = max(0, _as_int(self._cfg("cooldown_seconds", 120), 120, 0))
+        pending_id = uuid.uuid4().hex
+        pending_until = now + cooldown_seconds
+        state["cooldown_until"] = pending_until
 
         target = record
         try:
@@ -1730,6 +1730,12 @@ class AttentionGatePlugin(Star):
             if conversation is None:
                 state["cooldown_until"] = cooldown_prev
                 return
+            state["active_candidate_pending"] = {
+                "id": pending_id,
+                "at": now,
+                "prev": cooldown_prev,
+                "reserved_until": pending_until,
+            }
             candidate_prompt = self._dispatch_prompt(
                 group_id, state, target, "candidate"
             )
@@ -1739,10 +1745,17 @@ class AttentionGatePlugin(Star):
                     "group_id": group_id,
                     "message_id": str(record.get("message_id") or ""),
                     "sender_id": str(record.get("sender_id") or ""),
+                    "root_text": str(record.get("content") or ""),
+                    "created_at": time.time(),
                     "prefilter": prefilter_reason,
                     "cooldown_prev": cooldown_prev,
+                    "cooldown_reserved_until": pending_until,
+                    "pending_id": pending_id,
                 },
             )
+            # 必须在 request_llm 之前确定主聊天模型；AstrBot 会在
+            # on_llm_request 之前完成 provider 选择。
+            await self._force_main_chat_provider(event)
             yield event.request_llm(
                 prompt=candidate_prompt,
                 session_id=event.session_id,
@@ -1848,13 +1861,14 @@ class AttentionGatePlugin(Star):
         if not text:
             return
         state = self._state(group_id)
+        bot_names = self._bot_names()
         record = {
             "ts": time.time(),
             "time": _now_text(),
             "group_id": group_id,
             "message_id": "",
             "sender_id": str(event.get_self_id() or ""),
-            "sender_name": "鲸鲸",
+            "sender_name": bot_names[0] if bot_names else DEFAULT_BOT_NAME,
             "content": text[:2000],
             "reply_to": "",
             "is_self": True,
@@ -1865,35 +1879,97 @@ class AttentionGatePlugin(Star):
         state["last_bot_reply"] = text[:500]
         state["last_bot_at"] = time.time()
         state["last_bot_sender"] = str(
-            event.get_sender_id()
-            or state.get("last_dispatch_sender")
-            or ""
+            event.get_sender_id() or state.get("last_dispatch_sender") or ""
         )
+
+    def _expire_candidate_pending(self, state: dict[str, Any], now: float) -> None:
+        """候选请求若从未到达 on_llm_request，超时后释放预占冷却。"""
+        pending = state.get("active_candidate_pending")
+        if not isinstance(pending, dict):
+            return
+        ttl = max(
+            10,
+            _as_int(
+                self._cfg("send_gate_candidate_pending_timeout_seconds", 60),
+                60,
+                10,
+            ),
+        )
+        if now - _as_float(pending.get("at"), now) < ttl:
+            return
+        current = _as_float(state.get("cooldown_until"), 0.0)
+        reserved = _as_float(pending.get("reserved_until"), -1.0)
+        if reserved >= 0 and abs(current - reserved) <= 1e-6:
+            state["cooldown_until"] = _as_float(pending.get("prev"), 0.0)
+            logger.warning("%s 主动候选请求超时未进入发送门控，已恢复冷却", LOG)
+        state["active_candidate_pending"] = None
+
+    def _restore_active_candidate_cooldown(self, event: Any) -> None:
+        """主动候选被拒绝/取消时，把预占的冷却恢复到进入候选前的值。
+
+        该回调可能被 send_gate 重复调用，因此用 payload 标记保证幂等；
+        已成功 dispatch 的候选不会回滚。
+        """
+        try:
+            payload = event.get_extra(ACTIVE_CANDIDATE_EXTRA)
+            if not isinstance(payload, dict) or "cooldown_prev" not in payload:
+                return
+            if payload.get("cooldown_restored") or payload.get("candidate_committed"):
+                return
+            group_id = str(payload.get("group_id") or event.get_group_id() or "")
+            if not group_id:
+                return
+            state = self._states.get(group_id)
+            if state is None:
+                return
+            reserved = _as_float(payload.get("cooldown_reserved_until"), -1.0)
+            current = _as_float(state.get("cooldown_until"), 0.0)
+            if reserved >= 0 and abs(current - reserved) > 1e-6:
+                # 冷却已被另一条成功 dispatch 改写，不能用旧候选的
+                # cooldown_prev 把它回滚掉。
+                payload["cooldown_restored"] = True
+                event.set_extra(ACTIVE_CANDIDATE_EXTRA, payload)
+                return
+            state["cooldown_until"] = _as_float(payload.get("cooldown_prev"), 0.0)
+            pending = state.get("active_candidate_pending")
+            if (
+                not isinstance(pending, dict)
+                or not payload.get("pending_id")
+                or (pending.get("id") == payload.get("pending_id"))
+            ):
+                state["active_candidate_pending"] = None
+            payload["cooldown_restored"] = True
+            event.set_extra(ACTIVE_CANDIDATE_EXTRA, payload)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("%s 恢复主动候选冷却失败: %s", LOG, exc)
 
     async def _send_gate_active_judge(self, event: Any, req: Any, lane: Any) -> bool:
         """共享决策窗口：窗口合并完成后，再执行主动回复 Jev 决策。"""
         payload = event.get_extra(ACTIVE_CANDIDATE_EXTRA) or {}
+        if not isinstance(payload, dict):
+            payload = {}
         group_id = str(payload.get("group_id") or event.get_group_id() or "")
         target_id = str(payload.get("message_id") or "")
         prefilter_reason = str(payload.get("prefilter") or "")
-        cooldown_prev = payload.get("cooldown_prev")
         state = self._state(group_id)
         target = self._find_buffer_record(group_id, target_id)
         if target is None:
-            try:
-                state["cooldown_until"] = float(cooldown_prev or 0.0)
-            except Exception:
-                pass
+            self._restore_active_candidate_cooldown(event)
             return False
+        budget = _as_float(event.get_extra("send_gate_decision_budget"), 0.0)
         try:
             act, reason, detail = await self._judge(
-                event, group_id, state, target
+                event,
+                group_id,
+                state,
+                target,
+                timeout=budget or None,
             )
-        except Exception:
-            try:
-                state["cooldown_until"] = float(cooldown_prev or 0.0)
-            except Exception:
-                pass
+        except asyncio.CancelledError:
+            self._restore_active_candidate_cooldown(event)
+            raise
+        except Exception:  # noqa: BLE001
+            self._restore_active_candidate_cooldown(event)
             return False
         ledger = {
             "ts": time.time(),
@@ -1911,16 +1987,23 @@ class AttentionGatePlugin(Star):
             "deferred": True,
         }
         if not act:
-            try:
-                state["cooldown_until"] = float(cooldown_prev or 0.0)
-            except Exception:
-                pass
+            self._restore_active_candidate_cooldown(event)
             ledger["action"] = "candidate_reject"
             self._ledger(ledger)
             return False
-        prompt, provider_id = await self._commit_active_dispatch(
-            event, state, group_id, target, reason, prefilter_reason
-        )
+        try:
+            prompt, provider_id = await self._commit_active_dispatch(
+                event, state, group_id, target, reason, prefilter_reason
+            )
+        except asyncio.CancelledError:
+            self._restore_active_candidate_cooldown(event)
+            raise
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("%s 主动候选取材失败: %s", LOG, exc)
+            self._restore_active_candidate_cooldown(event)
+            return False
+        payload["candidate_committed"] = True
+        event.set_extra(ACTIVE_CANDIDATE_EXTRA, payload)
         try:
             req.prompt = prompt
         except Exception:
@@ -1931,16 +2014,24 @@ class AttentionGatePlugin(Star):
         self._ledger(ledger)
         return True
 
-    async def _send_gate_completeness(self, text: str) -> float | None:
+    async def _send_gate_completeness(
+        self, text: str, timeout: float | None = None
+    ) -> float | None:
         """发送门控专用：只判断这一轮是否已经说完；失败时裁剪 state 重试一次。"""
         original = str(text or "")
+        deadline = time.monotonic() + timeout if timeout else None
         for attempt in range(2):
-            body = original if attempt == 0 else original[: max(300, len(original) // 2)]
+            body = (
+                original if attempt == 0 else original[: max(300, len(original) // 2)]
+            )
+            remaining = None
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0.2:
+                    break
             try:
                 state = {
-                    "recent_conversation": [
-                        {"sender": "user", "content": body[:3000]}
-                    ],
+                    "recent_conversation": [{"sender": "user", "content": body[:3000]}],
                     "target_message": {"content": body[:3000]},
                     "note": "只判断用户这一轮是否表达完整，不判断是否值得回复",
                 }
@@ -1957,11 +2048,9 @@ class AttentionGatePlugin(Star):
                         },
                     }
                 }
-                response = await self._call_jev(state, questions)
+                response = await self._call_jev(state, questions, timeout=remaining)
                 answers = (
-                    response.get("answers", {})
-                    if isinstance(response, dict)
-                    else {}
+                    response.get("answers", {}) if isinstance(response, dict) else {}
                 )
                 answer = answers.get("is_burst_complete") or {}
                 if answer.get("type") != "noul":
@@ -1981,7 +2070,7 @@ class AttentionGatePlugin(Star):
         return None
 
     async def _send_gate_revalidate_proactive(
-        self, root_text: str, full_text: str
+        self, root_text: str, full_text: str, timeout: float | None = None
     ) -> bool | None:
         """主动回复窗口出现补充消息时，重新确认是否仍适合按原目标回复。
 
@@ -2012,7 +2101,7 @@ class AttentionGatePlugin(Star):
                     },
                 }
             }
-            response = await self._call_jev(state, questions)
+            response = await self._call_jev(state, questions, timeout=timeout)
             answers = response.get("answers", {}) if isinstance(response, dict) else {}
             answer = answers.get("still_fits") or {}
             if answer.get("type") != "noul":
@@ -2028,10 +2117,31 @@ class AttentionGatePlugin(Star):
 
     def drop_buffered_message(self, session_id: str, message_id: str) -> bool:
         """供 recall_cancel 等插件移除发送门控缓冲中的已撤回消息。"""
+        removed = False
         try:
-            return self._send_gate.drop_buffered_message(session_id, message_id)
+            removed = self._send_gate.drop_buffered_message(session_id, message_id)
         except Exception:
-            return False
+            removed = False
+        target = str(message_id or "")
+        if target:
+            for state in self._states.values():
+                kept = [
+                    item
+                    for item in state.get("buffer", ())
+                    if str(item.get("message_id") or "") != target
+                ]
+                if len(kept) != len(state.get("buffer", ())):
+                    state["buffer"] = deque(kept, maxlen=BUFFER_MAX)
+                    removed = True
+                unanswered = [
+                    item
+                    for item in state.get("unanswered", ())
+                    if str(item.get("message_id") or "") != target
+                ]
+                if len(unanswered) != len(state.get("unanswered", ())):
+                    state["unanswered"] = deque(unanswered, maxlen=30)
+                    removed = True
+        return removed
 
     def _send_gate_accept_group(self, event: AstrMessageEvent) -> bool:
         if event.is_private_chat() or event.is_stopped():
@@ -2056,9 +2166,7 @@ class AttentionGatePlugin(Star):
             return False
         return True
 
-    @filter.event_message_type(
-        filter.EventMessageType.GROUP_MESSAGE, priority=-1
-    )
+    @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE, priority=-1)
     async def on_send_gate_group_message(self, event: AstrMessageEvent) -> None:
         await self._send_gate.observe_group_message(
             event, accept=self._send_gate_accept_group
@@ -2067,8 +2175,7 @@ class AttentionGatePlugin(Star):
     # ------------------------------------------------------------------
     # 统一消息发送门控：dry-run / 真实窗口
     # ------------------------------------------------------------------
-    # 只观察，不 stop、不 sleep、不改 req。真实发送门控实现前放在最高
-    # 优先级，确保能先于旧 debounce/其他 hook 看到请求。
+    # 放在最高优先级，确保能先于其它发送类 hook 看到请求。
     @filter.on_waiting_llm_request(priority=900000)
     async def on_send_gate_waiting(self, event: AstrMessageEvent) -> None:
         await self._send_gate.observe_waiting(event)
@@ -2097,9 +2204,7 @@ class AttentionGatePlugin(Star):
         )
 
     @filter.on_llm_response(priority=-2000000)
-    async def on_send_gate_response(
-        self, event: AstrMessageEvent, resp: Any
-    ) -> None:
+    async def on_send_gate_response(self, event: AstrMessageEvent, resp: Any) -> None:
         if not event.get_extra("send_gate_released", False):
             return
         text = str(getattr(resp, "completion_text", "") or "")
