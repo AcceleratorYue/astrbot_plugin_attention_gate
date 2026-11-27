@@ -327,7 +327,7 @@ data/plugin_data/astrbot_plugin_attention_gate/send_gate_dryrun_YYYYMMDD.jsonl
 - Jev 请求失败/超时/限流时，主动决策直接 pass；
 - Jev 完整性失败时最终会释放，不永久阻塞；
 - `send_gate_max_wait_seconds` 与 `max_window` 同时作为总时长上限，取更小值；
-- 主动回复当前仍有决策层 `active_reply_settle_seconds=10` 的等待，随后再进入 send_gate 的 5 秒窗口，用户感知延迟约 15 秒；这是当前待收敛的“单一等待”设计差异；
+- send_gate 真实窗口启用时，主动回复的 `active_reply_settle_seconds` 等待被跳过；先由窗口合并，再在 send_gate 内执行主动 Jev 决策，实现共享决策窗口；
 - AstrBot follow-up capture 在 OnWaitingLLMRequest 之前消费的消息不会重新进入 gate；群聊普通跟进由本插件缓冲覆盖，但框架已消费的 follow-up 不可拦截；
 - root 在等待前一个 LLM 请求释放 session lock 时，`window_age` 可能很大，但进入 gate 后会立即释放；
 - 图片只作为附件和合并内容，不做独立视觉理解；
@@ -345,5 +345,5 @@ python -m unittest discover -s tests -v
 当前版本：
 
 ```text
-v0.8.6
+v0.9.0
 ```

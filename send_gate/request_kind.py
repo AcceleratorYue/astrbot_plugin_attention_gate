@@ -71,8 +71,10 @@ def classify_request(event: Any) -> RequestInfo:
     is_private = bool(_safe_call(event, "is_private_chat", False))
     text = str(_safe_call(event, "message_str", "") or "")
 
-    if _safe_extra(event, "active_reply_triggered") or _safe_extra(
-        event, "attention_gate_triggered"
+    if (
+        _safe_extra(event, "active_reply_triggered")
+        or _safe_extra(event, "attention_gate_triggered")
+        or _safe_extra(event, "send_gate_active_candidate")
     ):
         kind, source = PROACTIVE, "attention_gate"
     elif _safe_extra(event, "_poke_trigger", False):

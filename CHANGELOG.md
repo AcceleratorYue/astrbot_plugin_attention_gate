@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.9.0 (2026-11-27)
+
+### 共享决策窗口
+- 主动回复不再在 attention 决策层先等待 10 秒再判。
+- attention 只产出候选请求；send_gate 先等待/合并，再调用主动 Jev 决策。
+- 候选被拒绝时直接 stop，不进入模型；接受时写入正式 dispatch prompt。
+- send_gate 真实窗口启用时自动跳过 active_reply_settle，避免双重等待。
+
+### Jev 完整性失败重试
+- Jev 完整性失败时用裁剪后的 state 重试一次，仍失败再释放。
+
 ## 0.8.6 (2026-11-27)
 
 ### ONNX 模型迁移

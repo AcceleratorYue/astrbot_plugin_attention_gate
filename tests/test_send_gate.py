@@ -363,6 +363,72 @@ class DryRunObserverTests(unittest.TestCase):
         self.assertTrue(self.observer.drop_buffered_message("40004", "d2"))
         self.assertFalse(self.observer.drop_buffered_message("40004", "missing"))
 
+    def test_active_candidate_judge_accept(self):
+        self.config.values.update(
+            {
+                "send_gate_enforce": True,
+                "send_gate_dry_run": False,
+                "send_gate_min_wait_seconds": 0,
+                "send_gate_max_window_seconds": 1,
+            }
+        )
+        seen = {"called": False}
+
+        async def judge(event, req, lane):
+            seen["called"] = True
+            return True
+
+        observer = SendGateObserver(
+            config=self.config,
+            data_dir_getter=lambda: Path(self.tmp.name),
+            logger=FakeLogger(),
+            active_judge=judge,
+        )
+        event = FakeEvent(
+            text="候选",
+            msg_id="c1",
+            extras={
+                "active_reply_triggered": {},
+                "send_gate_active_candidate": {"message_id": "c1"},
+            },
+        )
+        req = SimpleNamespace(prompt="候选", image_urls=[])
+        run(observer.observe_waiting(event))
+        run(observer.observe_llm(event, req))
+        self.assertTrue(seen["called"])
+        self.assertFalse(event.stopped)
+
+    def test_active_candidate_judge_drop(self):
+        self.config.values.update(
+            {
+                "send_gate_enforce": True,
+                "send_gate_dry_run": False,
+                "send_gate_min_wait_seconds": 0,
+                "send_gate_max_window_seconds": 1,
+            }
+        )
+
+        async def judge(event, req, lane):
+            return False
+
+        observer = SendGateObserver(
+            config=self.config,
+            data_dir_getter=lambda: Path(self.tmp.name),
+            logger=FakeLogger(),
+            active_judge=judge,
+        )
+        event = FakeEvent(
+            text="候选",
+            msg_id="c2",
+            extras={
+                "active_reply_triggered": {},
+                "send_gate_active_candidate": {"message_id": "c2"},
+            },
+        )
+        run(observer.observe_waiting(event))
+        run(observer.observe_llm(event, req=SimpleNamespace(prompt="x", image_urls=[])))
+        self.assertTrue(event.stopped)
+
     def test_release_closes_lane(self):
         first = FakeEvent(text="第一句", msg_id="m1")
         second = FakeEvent(text="释放后的新消息", msg_id="m2")

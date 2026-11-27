@@ -75,6 +75,7 @@ class SendGateObserver:
         onnx: Any = None,
         completeness_getter: Callable[[str], Any] | None = None,
         revalidate_getter: Callable[[str, str], Any] | None = None,
+        active_judge: Callable[[Any, Any, Any], Any] | None = None,
     ) -> None:
         self._config = config
         self._config_getter = config_getter
@@ -83,6 +84,7 @@ class SendGateObserver:
         self._onnx = onnx
         self._completeness_getter = completeness_getter
         self._revalidate_getter = revalidate_getter
+        self._active_judge = active_judge
         self._lanes: dict[str, _Lane] = {}
         self._recent: dict[str, deque[_Buffered]] = {}
         self._non_dry_run_warned = False
@@ -390,8 +392,40 @@ class SendGateObserver:
 
                 lane.root_seen_llm = True
                 waited_ms = await self._wait_for_window(lane)
+                candidate = bool(
+                    event.get_extra("send_gate_active_candidate")
+                )
+                if candidate and self._active_judge is not None:
+                    remaining = max(0.0, self._deadline(lane) - time.time())
+                    try:
+                        accepted = await asyncio.wait_for(
+                            self._active_judge(event, req, lane),
+                            timeout=remaining if remaining > 0 else 0.01,
+                        )
+                    except Exception:
+                        accepted = False
+                    if not accepted:
+                        try:
+                            event.stop_event()
+                        except Exception:
+                            pass
+                        self._record(
+                            stage="llm",
+                            action="active_decision_drop",
+                            info=info,
+                            window_count=lane.count,
+                            window_age_ms=max(
+                                0, int((time.time() - lane.first_at) * 1000)
+                            ),
+                            would_wait_ms=waited_ms,
+                            enforce=True,
+                            onnx_score=lane.onnx_score,
+                        )
+                        self._lanes.pop(key, None)
+                        return
                 if (
                     lane.root_kind == PROACTIVE
+                    and not candidate
                     and lane.messages
                     and self._revalidate_getter is not None
                     and self._bool("send_gate_revalidate_proactive", True)
