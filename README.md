@@ -333,5 +333,5 @@ python -m unittest discover -s tests -v
 当前版本：
 
 ```text
-v0.8.1
+v0.8.2
 ```
