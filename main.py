@@ -42,7 +42,7 @@ except ImportError:  # 兼容测试直接 import main 的场景
     from send_gate import SendGateObserver
 
 PLUGIN_NAME = "astrbot_plugin_attention_gate"
-VERSION = "0.6.2"
+VERSION = "0.7.0"
 LOG = f"[{PLUGIN_NAME}]"
 
 DEFAULT_JEV_URL = "https://tokenrhythm.studio/v1/decision"

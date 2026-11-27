@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.7.0 (2026-11-27)
+
+### 真实发送窗口（灰度）
+- 新增 `send_gate_enforce` / `send_gate_enforce_groups` / `send_gate_enforce_private`。
+- 仅对普通群聊/私聊生效；主动回复、poke、follow-up 暂不强制。
+- root 在 `on_llm_request` 内等待安静窗口，follower 在 `on_waiting_llm_request` 被 stop。
+- root 合并 follower 文本和图片后释放原请求，不创建新请求。
+- 原请求释放后关闭 lane，避免旧窗口继续吞消息。
+
 ## 0.6.2 (2026-11-27)
 
 ### dry-run 修正

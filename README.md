@@ -535,6 +535,9 @@ data/plugin_data/astrbot_plugin_attention_gate/send_gate_dryrun_YYYYMMDD.jsonl
 {
   "send_gate_enable": true,
   "send_gate_dry_run": true,
+  "send_gate_enforce": false,
+  "send_gate_enforce_groups": [],
+  "send_gate_enforce_private": false,
   "send_gate_enabled_groups": [],
   "send_gate_observe_private": true,
   "send_gate_max_window_seconds": 30,
@@ -546,6 +549,16 @@ data/plugin_data/astrbot_plugin_attention_gate/send_gate_dryrun_YYYYMMDD.jsonl
 ```
 
 旧 `astrbot_plugin_debounce` 暂不停止，仍负责真实等待；新观察层只收集数据。
+
+v0.7.0 开始支持真实窗口灰度：
+
+```text
+send_gate_enforce=true
++ send_gate_enforce_groups 指定测试群
++ send_gate_enforce_private 决定是否处理私聊
+```
+
+开启真实窗口前必须停用旧 debounce，避免双窗口。当前只处理普通聊天/私聊；主动回复、poke、follow-up 仍走原链路。
 
 ## 与上下文感知增强（Context Aware）联动
 

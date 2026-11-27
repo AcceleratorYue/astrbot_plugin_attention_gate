@@ -71,6 +71,9 @@ class FakeEvent:
     def get_extra(self, key, default=None):
         return self._extras.get(key, default)
 
+    def set_extra(self, key, value):
+        self._extras[key] = value
+
     def stop_event(self):
         self.stopped = True
 
@@ -144,7 +147,7 @@ class SchemaOrderTests(unittest.TestCase):
                 encoding="utf-8"
             )
         )
-        self.assertEqual(len(schema), 65)
+        self.assertEqual(len(schema), 68)
         self.assertTrue(schema["enable"]["description"].startswith("【基础】"))
         self.assertTrue(schema["api_key"]["description"].startswith("【Jev】"))
         self.assertTrue(
@@ -212,6 +215,31 @@ class DryRunObserverTests(unittest.TestCase):
         records = self._records()
         self.assertEqual(records[-1]["stage"], "llm")
         self.assertEqual(records[-1]["prompt_chars"], len("original prompt"))
+
+    def test_enforce_root_follower_and_merge(self):
+        self.config.values.update(
+            {
+                "send_gate_enforce": True,
+                "send_gate_enforce_groups": [],
+                "send_gate_enforce_private": False,
+                "send_gate_min_wait_seconds": 0,
+                "send_gate_max_window_seconds": 1,
+            }
+        )
+        root = FakeEvent(text="根消息", msg_id="r1")
+        follower = FakeEvent(text="补充消息", msg_id="f1")
+        req = SimpleNamespace(prompt="根消息", image_urls=[])
+        run(self.observer.observe_waiting(root))
+        run(self.observer.observe_waiting(follower))
+        self.assertFalse(root.stopped)
+        self.assertTrue(follower.stopped)
+        run(self.observer.observe_llm(root, req))
+        self.assertIn("补充消息", req.prompt)
+        self.assertFalse(root.stopped)
+        # lane released, next message becomes a new root
+        after = FakeEvent(text="释放后消息", msg_id="a1")
+        run(self.observer.observe_waiting(after))
+        self.assertEqual(self.observer.stats()["lanes"], 1)
 
     def test_release_closes_lane(self):
         first = FakeEvent(text="第一句", msg_id="m1")

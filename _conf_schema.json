@@ -730,6 +730,26 @@
     "default": false,
     "hint": "当前只实现 dry-run；开启后仅记录，不改变真实发送"
   },
+  "send_gate_enforce": {
+    "description": "【发送门控】启用真实窗口发送",
+    "type": "bool",
+    "default": false,
+    "hint": "当前阶段只对普通群聊/私聊生效；开启前必须停用旧 debounce"
+  },
+  "send_gate_enforce_groups": {
+    "description": "【发送门控】真实窗口生效群",
+    "type": "list",
+    "items": {
+      "type": "string"
+    },
+    "default": [],
+    "hint": "空列表表示全部群聊；首次灰度建议只填一个群"
+  },
+  "send_gate_enforce_private": {
+    "description": "【发送门控】真实窗口处理私聊",
+    "type": "bool",
+    "default": false
+  },
   "send_gate_dry_run": {
     "description": "【发送门控】发送门控 dry-run",
     "type": "bool",
