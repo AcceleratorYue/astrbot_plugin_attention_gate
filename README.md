@@ -157,11 +157,13 @@ AstrBot/data/plugins/astrbot_plugin_attention_gate
 
 ### ONNX 模型
 
-默认尝试复用旧防抖插件的模型：
+默认使用本插件自己的模型目录：
 
 ```text
-D:\QQbot\astrbot\data\plugin_data\astrbot_plugin_debounce\models\normal
+data/plugin_data/astrbot_plugin_attention_gate/models/normal
 ```
+
+旧 debounce 目录只作为兼容回退，模型已迁移后不再依赖旧插件。
 
 也可以通过 `send_gate_onnx_model_path` 指定。  
 模型或依赖缺失时会自动降级为纯时间窗口，不会阻塞回复。
@@ -343,5 +345,5 @@ python -m unittest discover -s tests -v
 当前版本：
 
 ```text
-v0.8.5
+v0.8.6
 ```

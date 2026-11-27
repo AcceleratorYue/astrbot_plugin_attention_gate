@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.8.6 (2026-11-27)
+
+### ONNX 模型迁移
+- ONNX 模型迁入 `data/plugin_data/astrbot_plugin_attention_gate/models/normal`。
+- 默认加载本插件目录，旧 debounce 目录仅作为兼容回退。
+- 为后续卸载旧 debounce 解除模型依赖。
+
 ## 0.8.5 (2026-11-27)
 
 ### 审计修复

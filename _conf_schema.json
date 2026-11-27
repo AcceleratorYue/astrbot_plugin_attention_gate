@@ -785,7 +785,7 @@
     "description": "【发送门控】ONNX 模型目录",
     "type": "string",
     "default": "",
-    "hint": "留空使用旧 debounce 的 normal 模型"
+    "hint": "留空使用本插件 data/plugin_data/astrbot_plugin_attention_gate/models/<type>，旧 debounce 目录仅作兼容回退"
   },
   "send_gate_onnx_model_type": {
     "description": "【发送门控】ONNX 模型类型",

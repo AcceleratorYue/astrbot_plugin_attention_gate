@@ -38,10 +38,17 @@ class OnnxRhythm:
             self._cfg("send_gate_onnx_model_type", "normal") or "normal"
         )
         try:
-            plugin_data = self._data_dir_getter().parent
+            own_data = self._data_dir_getter()
         except Exception:
-            plugin_data = Path("D:/QQbot/astrbot/data/plugin_data")
-        return plugin_data / "astrbot_plugin_debounce" / "models" / model_type
+            own_data = Path(".")
+        own_path = own_data / "models" / model_type
+        if (own_path / "model.onnx").exists():
+            return own_path
+        # 兼容旧部署：新目录尚未迁移时仍可用 debounce 的模型。
+        legacy = own_data.parent / "astrbot_plugin_debounce" / "models" / model_type
+        if (legacy / "model.onnx").exists():
+            return legacy
+        return own_path
 
     async def score(self, text: str) -> float | None:
         if not self._enabled() or self._failed:
