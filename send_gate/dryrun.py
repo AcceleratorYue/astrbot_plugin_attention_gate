@@ -18,6 +18,7 @@ import datetime as _dt
 import json
 import time
 import uuid
+from collections import deque
 from pathlib import Path
 from typing import Any, Callable
 
@@ -84,6 +85,7 @@ class SendGateObserver:
         self._completeness_getter = completeness_getter
         self._revalidate_getter = revalidate_getter
         self._lanes: dict[str, _Lane] = {}
+        self._recent: dict[str, deque[_Buffered]] = {}
         self._non_dry_run_warned = False
 
     # ------------------------------------------------------------------
@@ -201,16 +203,15 @@ class SendGateObserver:
             )
             if enforce:
                 if active and lane is not None:
-                    lane.count += 1
-                    lane.last_at = now
                     lane.last_kind = info.kind
-                    lane.messages.append(
+                    self._append_follower(
+                        lane,
                         _Buffered(
                             text=info.text[:1000],
                             images=self._image_sources(event),
                             message_id=info.message_id,
                             ts=now,
-                        )
+                        ),
                     )
                     try:
                         event.stop_event()
@@ -231,6 +232,8 @@ class SendGateObserver:
                         root_kind=info.kind,
                         root_images=self._image_sources(event),
                     )
+                    for item in self._recent_after(key, info.message_id):
+                        self._append_follower(lane, item)
                     self._lanes[key] = lane
                     try:
                         event.set_extra(ROOT_EXTRA, token)
@@ -277,6 +280,56 @@ class SendGateObserver:
             )
         except Exception as exc:  # noqa: BLE001
             self._logger.debug("[send_gate] observe_waiting 失败: %s", exc)
+
+    async def observe_group_message(self, event: Any, accept: Any = None) -> None:
+        """记录所有群消息，供 root 在等待期间合并。
+
+        群聊里的后续消息通常不会单独产生 LLM 请求，因此不能只依赖
+        on_waiting_llm_request。这里在消息事件阶段先把它们放进 recent
+        buffer；root 建立窗口时再取走 root 之后的补充消息。
+        """
+        try:
+            if not self._base_enabled() or not self._enforce_enabled():
+                return
+            info = classify_request(event)
+            if info.is_private or info.kind not in USER_FACING_KINDS:
+                return
+            if accept is not None:
+                try:
+                    if not accept(event):
+                        return
+                except Exception:
+                    return
+            now = time.time()
+            self._cleanup(now)
+            key = self._lane_key(info)
+            item = _Buffered(
+                text=info.text[:1000],
+                images=self._image_sources(event),
+                message_id=info.message_id,
+                ts=now,
+            )
+            recent = self._recent.get(key)
+            if recent is None:
+                recent = deque(maxlen=12)
+                self._recent[key] = recent
+            recent.append(item)
+            lane = self._lanes.get(key)
+            if lane is not None and now - lane.first_at <= self._int(
+                "send_gate_max_window_seconds", 20, 1
+            ):
+                self._append_follower(lane, item)
+                self._record(
+                    stage="waiting",
+                    action="group_buffered",
+                    info=info,
+                    window_count=lane.count,
+                    window_age_ms=max(0, int((now - lane.first_at) * 1000)),
+                    would_wait_ms=0,
+                    enforce=True,
+                )
+        except Exception as exc:  # noqa: BLE001
+            self._logger.debug("[send_gate] observe_group_message 失败: %s", exc)
 
     async def observe_llm(self, event: Any, req: Any) -> None:
         try:
@@ -538,6 +591,30 @@ class SendGateObserver:
         except Exception:
             return []
 
+    def _append_follower(self, lane: _Lane, item: _Buffered) -> bool:
+        if item.message_id and any(
+            old.message_id == item.message_id for old in lane.messages
+        ):
+            return False
+        lane.messages.append(item)
+        lane.count += 1
+        lane.last_at = max(lane.last_at, item.ts)
+        return True
+
+    def _recent_after(self, key: str, message_id: str) -> list[_Buffered]:
+        recent = self._recent.get(key)
+        if not recent:
+            return []
+        items = list(recent)
+        index = None
+        for i, item in enumerate(items):
+            if message_id and item.message_id == message_id:
+                index = i
+                break
+        if index is None:
+            return []
+        return items[index + 1 :]
+
     # ------------------------------------------------------------------
     # 内部
     # ------------------------------------------------------------------
@@ -562,6 +639,14 @@ class SendGateObserver:
         ]
         for key in expired:
             self._lanes.pop(key, None)
+            self._recent.pop(key, None)
+        recent_expired = [
+            key
+            for key, items in self._recent.items()
+            if items and now - items[-1].ts > cleanup
+        ]
+        for key in recent_expired:
+            self._recent.pop(key, None)
 
     def _record(
         self,

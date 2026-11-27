@@ -6,7 +6,7 @@ desc: >-
   所有用户面向请求进入统一发送窗口：等待用户说完、合并同用户补充、
   ONNX/Jev 判断完整、主动回复 revalidate，最终只释放一次原请求。
   支持群聊/私聊、主动回复/poke/follow-up、模板兴趣/话题、密度/疲劳和强制引用。
-version: 0.8.2
+version: 0.8.3
 author: AcceleratorYue
 repo: https://github.com/AcceleratorYue/astrbot_plugin_attention_gate
 social_link: https://github.com/AcceleratorYue

@@ -44,7 +44,7 @@ except ImportError:  # 兼容测试直接 import main 的场景
     from send_gate.onnx_rhythm import OnnxRhythm
 
 PLUGIN_NAME = "astrbot_plugin_attention_gate"
-VERSION = "0.8.2"
+VERSION = "0.8.3"
 LOG = f"[{PLUGIN_NAME}]"
 
 DEFAULT_JEV_URL = "https://tokenrhythm.studio/v1/decision"
@@ -1855,6 +1855,29 @@ class AttentionGatePlugin(Star):
         except Exception as exc:  # noqa: BLE001
             logger.debug("%s send_gate 主动回复 revalidate 失败: %s", LOG, exc)
         return None
+
+    def _send_gate_accept_group(self, event: AstrMessageEvent) -> bool:
+        if event.is_private_chat():
+            return False
+        group_id = str(event.get_group_id() or "")
+        if not group_id or not self._group_allowed(group_id):
+            return False
+        self_id = str(event.get_self_id() or "")
+        sender_id = str(event.get_sender_id() or "")
+        if not self_id or not sender_id or sender_id == self_id:
+            return False
+        other_bots = {str(x) for x in (self._cfg("other_bot_ids", []) or [])}
+        if sender_id in other_bots:
+            return False
+        return True
+
+    @filter.event_message_type(
+        filter.EventMessageType.GROUP_MESSAGE, priority=-1
+    )
+    async def on_send_gate_group_message(self, event: AstrMessageEvent) -> None:
+        await self._send_gate.observe_group_message(
+            event, accept=self._send_gate_accept_group
+        )
 
     # ------------------------------------------------------------------
     # 统一消息发送门控：dry-run / 真实窗口

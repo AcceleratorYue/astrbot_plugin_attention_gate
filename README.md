@@ -131,7 +131,7 @@ AstrBot/data/plugins/astrbot_plugin_attention_gate
   "send_gate_enforce_private": true,
   "send_gate_dry_run": false,
 
-  "send_gate_min_wait_seconds": 2,
+  "send_gate_min_wait_seconds": 5,
   "send_gate_max_wait_seconds": 5,
   "send_gate_max_window_seconds": 20,
 
@@ -231,7 +231,8 @@ follower：同一发送者在窗口内继续发来的消息
 
 ```text
 root 在 on_llm_request 中等待
-follower 在 on_waiting_llm_request 中被 stop
+普通群聊跟进消息由群消息事件缓冲，不要求它自己产生 LLM 请求
+follower 请求在 on_waiting_llm_request 中被 stop
 root 合并 follower 文本和图片
 root 释放原请求
 ```
@@ -333,5 +334,5 @@ python -m unittest discover -s tests -v
 当前版本：
 
 ```text
-v0.8.2
+v0.8.3
 ```

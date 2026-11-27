@@ -304,6 +304,25 @@ class DryRunObserverTests(unittest.TestCase):
         self.assertTrue(root.stopped)
         self.assertEqual(req.prompt, "原目标")
 
+    def test_group_followups_buffered_before_root_request(self):
+        self.config.values.update(
+            {
+                "send_gate_enforce": True,
+                "send_gate_enforce_groups": [],
+                "send_gate_min_wait_seconds": 0,
+                "send_gate_max_window_seconds": 1,
+            }
+        )
+        root = FakeEvent(text="第一句", msg_id="g1", group="20002")
+        follow = FakeEvent(text="后续一句", msg_id="g2", group="20002")
+        req = SimpleNamespace(prompt="第一句", image_urls=[])
+        run(self.observer.observe_group_message(root, accept=lambda e: True))
+        run(self.observer.observe_group_message(follow, accept=lambda e: True))
+        run(self.observer.observe_waiting(root))
+        run(self.observer.observe_llm(root, req))
+        self.assertIn("后续一句", req.prompt)
+        self.assertFalse(follow.stopped)
+
     def test_release_closes_lane(self):
         first = FakeEvent(text="第一句", msg_id="m1")
         second = FakeEvent(text="释放后的新消息", msg_id="m2")

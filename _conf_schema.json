@@ -834,7 +834,8 @@
   "send_gate_min_wait_seconds": {
     "description": "【发送门控】dry-run 模拟最短等待（秒）",
     "type": "int",
-    "default": 2
+    "default": 5,
+    "hint": "默认 5 秒，覆盖群聊连发；太小会漏掉后续 follow-up"
   },
   "send_gate_max_wait_seconds": {
     "description": "【发送门控】dry-run 模拟最长等待（秒）",
