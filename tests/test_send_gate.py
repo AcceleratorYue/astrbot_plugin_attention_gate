@@ -147,7 +147,7 @@ class SchemaOrderTests(unittest.TestCase):
                 encoding="utf-8"
             )
         )
-        self.assertEqual(len(schema), 76)
+        self.assertEqual(len(schema), 77)
         self.assertTrue(schema["enable"]["description"].startswith("【基础】"))
         self.assertTrue(schema["api_key"]["description"].startswith("【Jev】"))
         self.assertTrue(
@@ -270,6 +270,39 @@ class DryRunObserverTests(unittest.TestCase):
         run(observer.observe_waiting(root))
         run(observer.observe_llm(root, req))
         self.assertEqual(calls, ["没说完"])
+
+    def test_revalidate_drop_blocks_release(self):
+        async def revalidate(root_text, full_text):
+            return False
+        observer = SendGateObserver(
+            config=FakeConfig(
+                {
+                    "send_gate_enable": True,
+                    "send_gate_dry_run": True,
+                    "send_gate_enforce": True,
+                    "send_gate_enforce_groups": [],
+                    "send_gate_enforce_private": False,
+                    "send_gate_min_wait_seconds": 0,
+                    "send_gate_max_window_seconds": 1,
+                    "send_gate_revalidate_proactive": True,
+                }
+            ),
+            data_dir_getter=lambda: Path(self.tmp.name),
+            logger=FakeLogger(),
+            revalidate_getter=revalidate,
+        )
+        root = FakeEvent(
+            text="原目标",
+            msg_id="p1",
+            extras={"active_reply_triggered": {"x": 1}},
+        )
+        follower = FakeEvent(text="新话题", msg_id="p2")
+        req = SimpleNamespace(prompt="原目标", image_urls=[])
+        run(observer.observe_waiting(root))
+        run(observer.observe_waiting(follower))
+        run(observer.observe_llm(root, req))
+        self.assertTrue(root.stopped)
+        self.assertEqual(req.prompt, "原目标")
 
     def test_release_closes_lane(self):
         first = FakeEvent(text="第一句", msg_id="m1")

@@ -791,6 +791,12 @@
     "type": "bool",
     "default": false
   },
+  "send_gate_revalidate_proactive": {
+    "description": "【发送门控】主动回复新增消息时重新验证",
+    "type": "bool",
+    "default": true,
+    "hint": "窗口内出现补充消息时调用 Jev 重新确认是否仍适合按原目标回复"
+  },
   "send_gate_jev_complete_threshold": {
     "description": "【发送门控】Jev 完整阈值",
     "type": "float",

@@ -74,6 +74,7 @@ class SendGateObserver:
         config_getter: Callable[[str, Any], Any] | None = None,
         onnx: Any = None,
         completeness_getter: Callable[[str], Any] | None = None,
+        revalidate_getter: Callable[[str, str], Any] | None = None,
     ) -> None:
         self._config = config
         self._config_getter = config_getter
@@ -81,6 +82,7 @@ class SendGateObserver:
         self._logger = logger
         self._onnx = onnx
         self._completeness_getter = completeness_getter
+        self._revalidate_getter = revalidate_getter
         self._lanes: dict[str, _Lane] = {}
         self._non_dry_run_warned = False
 
@@ -317,6 +319,38 @@ class SendGateObserver:
                     return
 
                 waited_ms = await self._wait_for_window(lane)
+                if (
+                    lane.root_kind == PROACTIVE
+                    and lane.messages
+                    and self._revalidate_getter is not None
+                    and self._bool("send_gate_revalidate_proactive", True)
+                ):
+                    keep = None
+                    try:
+                        keep = await self._revalidate_getter(
+                            lane.root_text, self._lane_text(lane)
+                        )
+                    except Exception:
+                        keep = None
+                    if keep is False:
+                        try:
+                            event.stop_event()
+                        except Exception:
+                            pass
+                        self._record(
+                            stage="llm",
+                            action="revalidate_drop",
+                            info=info,
+                            window_count=lane.count,
+                            window_age_ms=max(
+                                0, int((time.time() - lane.first_at) * 1000)
+                            ),
+                            would_wait_ms=waited_ms,
+                            enforce=True,
+                            onnx_score=lane.onnx_score,
+                        )
+                        self._lanes.pop(key, None)
+                        return
                 merged = await self._merge_into_request(req, lane)
                 self._record(
                     stage="llm",

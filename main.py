@@ -627,6 +627,7 @@ class AttentionGatePlugin(Star):
                 logger=logger,
             ),
             completeness_getter=self._send_gate_completeness,
+            revalidate_getter=self._send_gate_revalidate_proactive,
         )
         self._msg_embedding_cache: OrderedDict[str, list[float]] = OrderedDict()
         self._profile_embedding_cache: dict[str, tuple[str, list[list[float]]]] = {}
@@ -1807,6 +1808,52 @@ class AttentionGatePlugin(Star):
                 return max(0.0, min(1.0, float(value)))
         except Exception as exc:  # noqa: BLE001
             logger.debug("%s send_gate Jev 完整性失败: %s", LOG, exc)
+        return None
+
+    async def _send_gate_revalidate_proactive(
+        self, root_text: str, full_text: str
+    ) -> bool | None:
+        """主动回复窗口出现补充消息时，重新确认是否仍适合按原目标回复。
+
+        返回：
+        - True：keep，继续；
+        - False：drop，不再发送；
+        - None：revalidate 失败，保留原请求并加护栏。
+        """
+        if not str(root_text or "").strip() or not str(full_text or "").strip():
+            return None
+        try:
+            state = {
+                "original_target": str(root_text)[:1500],
+                "new_messages": str(full_text)[:3000],
+                "note": "判断新增消息出现后，是否仍适合针对原主动目标回复",
+            }
+            questions = {
+                "still_fits": {
+                    "type": "noul",
+                    "instructions": (
+                        "原主动回复目标已经确定。现在用户又补充了消息，"
+                        "请判断是否仍然适合按原目标回复。"
+                        "如果新消息明显转移话题、否定原目标或已经不需要接话，返回 false。"
+                    ),
+                    "criteria": {
+                        "true": "新消息只是补充/延续，仍适合按原目标回复。",
+                        "false": "新消息已经偏离、否定原目标，或不应继续回复。",
+                    },
+                }
+            }
+            response = await self._call_jev(state, questions)
+            answers = response.get("answers", {}) if isinstance(response, dict) else {}
+            answer = answers.get("still_fits") or {}
+            if answer.get("type") != "noul":
+                return None
+            value = answer.get("noul")
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, (int, float)):
+                return float(value) >= 0.5
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("%s send_gate 主动回复 revalidate 失败: %s", LOG, exc)
         return None
 
     # ------------------------------------------------------------------

@@ -6,7 +6,7 @@
 - 接入可选 ONNX 句尾节奏；低分时延长等待，模型缺失自动降级。
 - 接入 Jev `is_burst_complete` 完整性判断；只用于普通聊天/私聊。
 - 主动回复、poke、follow-up 也进入真实窗口。
-- 主动回复窗口内出现补充消息时，在 prompt 中加入 keep_silent 护栏。
+- 主动回复窗口内出现补充消息时调用 Jev revalidate；drop 则停止原请求，失败保留原请求并加入 keep_silent 护栏。
 - 失败/超时仍会在 max_window 内释放，不阻塞请求。
 
 ## 0.7.0 (2026-11-27)

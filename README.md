@@ -550,6 +550,16 @@ data/plugin_data/astrbot_plugin_attention_gate/send_gate_dryrun_YYYYMMDD.jsonl
 
 旧 `astrbot_plugin_debounce` 暂不停止，仍负责真实等待；新观察层只收集数据。
 
+v0.8.0 起支持 ONNX 句尾节奏、Jev 完整性和主动回复 revalidate：
+
+```json
+{
+  "send_gate_onnx_enable": true,
+  "send_gate_jev_enable": true,
+  "send_gate_revalidate_proactive": true
+}
+```
+
 v0.7.0 开始支持真实窗口灰度：
 
 ```text
