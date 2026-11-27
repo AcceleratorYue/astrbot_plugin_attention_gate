@@ -1,13 +1,12 @@
 name: astrbot_plugin_attention_gate
-display_name: 注意力主动回复门控
-short_desc: 用 Jev 按人格兴趣与群话题决定是否主动接话，不做随机概率
+display_name: 鲸鲸消息发送门控
+short_desc: Jev 决定是否主动接话，统一发送窗口合并连发、控制时机、ONNX/Jev 完整性去重
 desc: >-
-  观察群聊消息，用 Jev 判断当前消息是否符合全局人格兴趣、
-  当前群独立话题画像，或是否产生突发接话欲望。
-  只有高置信、低风险、时机合适时，才通过 AstrBot 原生管线触发一次主动回复。
-  支持 dry-run、单群每小时上限、120 秒冷却、冷却期消息缓冲、
-  接话延续识别、模板列表形式的兴趣/话题/问题配置和强制引用目标消息。
-version: 0.5.1
+  观察群聊与私聊消息，用 Jev 判断是否值得主动接话；决定回复后，
+  所有用户面向请求进入统一发送窗口：等待用户说完、合并同用户补充、
+  ONNX/Jev 判断完整、主动回复 revalidate，最终只释放一次原请求。
+  支持群聊/私聊、主动回复/poke/follow-up、模板兴趣/话题、密度/疲劳和强制引用。
+version: 0.8.1
 author: AcceleratorYue
 repo: https://github.com/AcceleratorYue/astrbot_plugin_attention_gate
 social_link: https://github.com/AcceleratorYue
@@ -16,7 +15,10 @@ support_platforms:
   - aiocqhttp
 tags:
   - 主动回复
+  - 发送门控
+  - 消息合并
+  - 防抖
   - Jev
-  - 注意力
+  - ONNX
   - 群聊
   - TypeSafe

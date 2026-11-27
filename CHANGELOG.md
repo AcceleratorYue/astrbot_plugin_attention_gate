@@ -1,5 +1,51 @@
 # Changelog
 
+## 0.8.1 (2026-11-27)
+
+### 插件定位更新
+- 插件展示名改为「鲸鲸消息发送门控」。
+- 简介、metadata 和 README 更新为“主动决策 + 统一发送门控”的完整定位。
+- 补充 ONNX、Jev 完整性、全请求类型、revalidate 和真实窗口说明。
+
+## 0.8.0 (2026-11-27)
+
+### 完整发送门控
+- 接入可选 ONNX 句尾节奏；低分时延长等待，模型缺失自动降级。
+- 接入 Jev `is_burst_complete` 完整性判断；只用于普通聊天/私聊。
+- 主动回复、poke、follow-up 也进入真实窗口。
+- 主动回复窗口内出现补充消息时调用 Jev revalidate；drop 则停止原请求，失败保留原请求并加入 keep_silent 护栏。
+- 失败/超时仍会在 max_window 内释放，不阻塞请求。
+
+## 0.7.0 (2026-11-27)
+
+### 真实发送窗口（灰度）
+- 新增 `send_gate_enforce` / `send_gate_enforce_groups` / `send_gate_enforce_private`。
+- 仅对普通群聊/私聊生效；主动回复、poke、follow-up 暂不强制。
+- root 在 `on_llm_request` 内等待安静窗口，follower 在 `on_waiting_llm_request` 被 stop。
+- root 合并 follower 文本和图片后释放原请求，不创建新请求。
+- 原请求释放后关闭 lane，避免旧窗口继续吞消息。
+
+## 0.6.2 (2026-11-27)
+
+### dry-run 修正
+- 原请求释放后立即关闭 lane，后续同用户消息会开启新窗口，不再并入已释放的旧窗口。
+- 修正历史 dry-run 中“释放后仍出现 would_merge”和 window_age 超窗口的问题。
+
+## 0.6.1 (2026-11-26)
+
+### 配置页整理
+- 配置项按【基础】【Jev】【人格与话题】【主动节奏】【判断阈值】【突发欲望】【预筛】【问题定义】【发送门控】重排。
+- 仅调整 schema 顺序和描述前缀，不改变配置 key、默认值或读取逻辑。
+
+## 0.6.0 (2026-11-26)
+
+### 统一消息发送门控：dry-run 观察层
+- 新增 `send_gate/` 模块和 `on_waiting_llm_request` / `on_llm_request` 观察 Hook。
+- 当前只做 dry-run：不 stop、不 sleep、不改写 ProviderRequest。
+- 记录 `would_root` / `would_merge` / `would_release` 到 `send_gate_dryrun_YYYYMMDD.jsonl`。
+- 支持按群过滤、私聊开关、窗口长度、模拟等待和 lane 清理。
+- 旧 `astrbot_plugin_debounce` 仍保留，不参与新观察层。
+
 ## 0.5.1 (2026-11-25)
 
 ### 修复
