@@ -3,8 +3,21 @@ __pycache__/
 .pytest_cache/
 .venv/
 venv/
+
+# 发布与本地生成物
 dist/
 *.zip
+*.log
+*.jsonl
+*.onnx
 
-# AstrBot local runtime data
+# 编辑器/系统
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.bak
+*.tmp
+
+# AstrBot 本地运行数据
 data/

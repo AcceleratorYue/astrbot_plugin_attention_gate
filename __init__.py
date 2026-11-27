@@ -1,4 +1,4 @@
-"""注意力主动回复门控插件。"""
+"""消息发送门控插件。"""
 
 from .main import AttentionGatePlugin
 
