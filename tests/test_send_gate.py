@@ -213,6 +213,15 @@ class DryRunObserverTests(unittest.TestCase):
         self.assertEqual(records[-1]["stage"], "llm")
         self.assertEqual(records[-1]["prompt_chars"], len("original prompt"))
 
+    def test_release_closes_lane(self):
+        first = FakeEvent(text="第一句", msg_id="m1")
+        second = FakeEvent(text="释放后的新消息", msg_id="m2")
+        run(self.observer.observe_waiting(first))
+        run(self.observer.observe_llm(first, SimpleNamespace(prompt="p", image_urls=[])))
+        run(self.observer.observe_waiting(second))
+        actions = [r["action"] for r in self._records()]
+        self.assertEqual(actions, ["would_root", "would_release", "would_root"])
+
     def test_disabled_is_noop(self):
         self.config.values["send_gate_enable"] = False
         event = FakeEvent()

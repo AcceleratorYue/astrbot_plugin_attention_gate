@@ -186,6 +186,10 @@ class SendGateObserver:
                 prompt_chars=len(str(getattr(req, "prompt", "") or "")),
                 image_count=len(getattr(req, "image_urls", None) or ()),
             )
+            # 原请求已经释放，后续同用户消息必须开启新窗口，
+            # 不能再并入已经释放的 lane。
+            if lane is not None:
+                self._lanes.pop(key, None)
         except Exception as exc:  # noqa: BLE001
             self._logger.debug("[send_gate] observe_llm 失败: %s", exc)
 
