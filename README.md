@@ -1,4 +1,4 @@
-# 鲸鲸消息发送门控（astrbot_plugin_attention_gate）
+# 消息发送门控（astrbot_plugin_attention_gate）
 
 项目仓库：<https://github.com/AcceleratorYue/astrbot_plugin_attention_gate>
 
